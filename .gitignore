@@ -104,6 +104,9 @@ test-results/
 playwright-report/
 playwright/.cache/
 
+# Generated acceptance-test evidence
+dhf/allure-results/
+
 # Cursor
 .cursor/
 
