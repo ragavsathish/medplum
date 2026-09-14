@@ -1,14 +1,17 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
+import { isGone, isNotFound, MedplumClient, normalizeOperationOutcome } from '@medplum/core';
 import * as allure from 'allure-js-commons';
-import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
+import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from 'undici';
 import { afterEach, describe, expect, test } from 'vitest';
 import { createHealthTrackingHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
 
 const openServers: Server[] = [];
+const fhirResourcesToDelete: FhirResourceFixture[] = [];
 const liveDispatcher = getGlobalDispatcher();
 let mockAgent: MockAgent | undefined;
 
@@ -16,8 +19,6 @@ const measurementCases = [
   {
     name: 'height',
     measurement: {
-      id: 'height-http-1',
-      patientId: 'child-1',
       observedAt: '2026-09-14T08:00:00+03:00',
       kind: 'height',
       value: 138.2,
@@ -27,8 +28,6 @@ const measurementCases = [
   {
     name: 'weight',
     measurement: {
-      id: 'weight-http-1',
-      patientId: 'child-1',
       observedAt: '2026-09-14T08:00:00+03:00',
       kind: 'weight',
       value: 32.4,
@@ -41,10 +40,18 @@ type MedplumTestBackend = {
   readonly mode: 'live' | 'mock';
   readonly baseUrl: string;
   readonly accessToken: string;
+  readonly client: MedplumClient;
+};
+
+type FhirResourceFixture = {
+  readonly medplum: MedplumTestBackend;
+  readonly resourceType: 'Observation' | 'Patient';
+  readonly id: string;
 };
 
 afterEach(async () => {
   await Promise.all(openServers.splice(0).map(closeServer));
+  await cleanupFhirFixtures();
   setGlobalDispatcher(liveDispatcher);
   await mockAgent?.close();
   mockAgent = undefined;
@@ -56,6 +63,13 @@ describe('Health Tracking HTTP API', () => {
 
     const medplum = await getMedplumTestBackend();
     await allure.parameter('Medplum backend', medplum.mode);
+    const patientId = await seedTestPatient(medplum);
+    const measurement = {
+      id: `${testCase.name}-${randomUUID()}`,
+      patientId,
+      ...testCase.measurement,
+    } as const;
+    fhirResourcesToDelete.push({ medplum, resourceType: 'Observation', id: measurement.id });
 
     const healthTrackingServer = await listen(
       createServer(createHealthTrackingHttpApp({ medplumBaseUrl: medplum.baseUrl }))
@@ -67,7 +81,7 @@ describe('Health Tracking HTTP API', () => {
         authorization: '[REDACTED]',
         'content-type': 'application/json',
       },
-      body: testCase.measurement,
+      body: measurement,
     } as const;
 
     const response = await fetch(apiRequest.url, {
@@ -80,20 +94,17 @@ describe('Health Tracking HTTP API', () => {
     });
     const responseBody: unknown = await response.json();
 
-    const observationResponse = await fetch(
-      new URL(`fhir/R4/Observation/${testCase.measurement.id}`, medplum.baseUrl),
-      { headers: { authorization: `Bearer ${medplum.accessToken}` } }
-    );
-    const observationBody: unknown = await observationResponse.json();
+    const observation = await medplum.client.readResource('Observation', measurement.id);
 
     await allure.attachment(
       'HTTP API evidence',
       JSON.stringify(
         {
           medplumBackend: medplum.mode,
+          seededPatient: `Patient/${patientId}`,
           request: apiRequest,
           response: { status: response.status, body: responseBody },
-          persistedObservation: { status: observationResponse.status, body: observationBody },
+          persistedObservation: observation,
         },
         null,
         2
@@ -102,18 +113,17 @@ describe('Health Tracking HTTP API', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(responseBody).toEqual({ type: 'MEASUREMENT_RECORDED', payload: testCase.measurement });
-    expect(observationResponse.status).toBe(200);
-    expect(observationBody).toMatchObject({
+    expect(responseBody).toEqual({ type: 'MEASUREMENT_RECORDED', payload: measurement });
+    expect(observation).toMatchObject({
       resourceType: 'Observation',
-      id: testCase.measurement.id,
-      subject: { reference: 'Patient/child-1' },
-      effectiveDateTime: testCase.measurement.observedAt,
+      id: measurement.id,
+      subject: { reference: `Patient/${patientId}` },
+      effectiveDateTime: measurement.observedAt,
       valueQuantity: {
-        value: testCase.measurement.value,
-        unit: testCase.measurement.unit,
+        value: measurement.value,
+        unit: measurement.unit,
         system: 'http://unitsofmeasure.org',
-        code: testCase.measurement.unit,
+        code: measurement.unit,
       },
     });
   });
@@ -124,15 +134,16 @@ async function getMedplumTestBackend(): Promise<MedplumTestBackend> {
     return createMockMedplumBackend();
   }
 
-  return {
+  return createMedplumTestBackend({
     mode: 'live',
     baseUrl: process.env['MEDPLUM_BASE_URL'] ?? 'http://127.0.0.1:8103/',
     accessToken: requiredEnvironmentVariable('MEDPLUM_ACCESS_TOKEN'),
-  };
+  });
 }
 
 function createMockMedplumBackend(): MedplumTestBackend {
   const baseUrl = 'http://medplum.test/';
+  const patients = new Map<string, unknown>();
   const observations = new Map<string, unknown>();
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
@@ -145,6 +156,15 @@ function createMockMedplumBackend(): MedplumTestBackend {
     .reply(200, { profile: { resourceType: 'RelatedPerson', id: 'parent-1' } }, fhirResponse)
     .persist();
   medplum
+    .intercept({ method: 'POST', path: '/fhir/R4/Patient' })
+    .reply(({ body }) => {
+      const id = randomUUID();
+      const patient = { ...asRecord(parseRequestBody(body)), id };
+      patients.set(id, patient);
+      return { statusCode: 201, data: patient, responseOptions: fhirResponse };
+    })
+    .persist();
+  medplum
     .intercept({ method: 'POST', path: '/fhir/R4' })
     .reply(({ body }) => {
       const observation = transactionResource(parseRequestBody(body), 'Observation');
@@ -155,6 +175,18 @@ function createMockMedplumBackend(): MedplumTestBackend {
       return {
         statusCode: 200,
         data: { resourceType: 'Bundle', type: 'transaction-response' },
+        responseOptions: fhirResponse,
+      };
+    })
+    .persist();
+  medplum
+    .intercept({ method: 'DELETE', path: /^\/fhir\/R4\/(Observation|Patient)\/[^/?]+$/ })
+    .reply(({ path }) => {
+      const [, resourceType, id] = path.match(/^\/fhir\/R4\/(Observation|Patient)\/([^/?]+)$/) ?? [];
+      const deleted = resourceType === 'Observation' ? observations.delete(id) : patients.delete(id);
+      return {
+        statusCode: deleted ? 204 : 404,
+        data: deleted ? undefined : { resourceType: 'OperationOutcome', issue: [] },
         responseOptions: fhirResponse,
       };
     })
@@ -174,10 +206,38 @@ function createMockMedplumBackend(): MedplumTestBackend {
     })
     .persist();
 
-  return { mode: 'mock', baseUrl, accessToken: createTestAccessToken() };
+  return createMedplumTestBackend({ mode: 'mock', baseUrl, accessToken: createTestAccessToken() });
 }
 
 const fhirResponse = { headers: { 'content-type': 'application/fhir+json' } } as const;
+
+async function seedTestPatient(medplum: MedplumTestBackend): Promise<string> {
+  const patient = await medplum.client.createResource({
+    resourceType: 'Patient',
+    active: true,
+    identifier: [{ system: 'urn:medplum:health-tracking:acceptance', value: randomUUID() }],
+    name: [{ use: 'official', family: 'Acceptance', given: ['Health Tracking'] }],
+  });
+  fhirResourcesToDelete.push({ medplum, resourceType: 'Patient', id: patient.id });
+  return patient.id;
+}
+
+async function cleanupFhirFixtures(): Promise<void> {
+  for (const fixture of fhirResourcesToDelete.splice(0).reverse()) {
+    try {
+      await fixture.medplum.client.deleteResource(fixture.resourceType, fixture.id);
+    } catch (error) {
+      const outcome = normalizeOperationOutcome(error);
+      if (!isNotFound(outcome) && !isGone(outcome)) {
+        throw error;
+      }
+    }
+  }
+}
+
+function createMedplumTestBackend(backend: Omit<MedplumTestBackend, 'client'>): MedplumTestBackend {
+  return { ...backend, client: new MedplumClient({ baseUrl: backend.baseUrl, accessToken: backend.accessToken }) };
+}
 
 async function listen(server: Server): Promise<{ server: Server; url: string }> {
   openServers.push(server);
@@ -241,4 +301,8 @@ function transactionResource(value: unknown, resourceType: string): Record<strin
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
 }
