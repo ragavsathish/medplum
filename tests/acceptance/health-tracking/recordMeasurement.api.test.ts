@@ -18,6 +18,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from 'undici';
 import { afterEach, describe, expect, test } from 'vitest';
+import type { Measurement } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/core/entities/measurement';
 import { createHealthTrackingHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
 
 const openServers: Server[] = [];
@@ -27,7 +28,9 @@ let mockAgent: MockAgent | undefined;
 
 const measurementCases = [
   {
+    acceptanceCriterion: 'AC-HT-001',
     name: 'height',
+    loincCode: '8302-2',
     measurement: {
       observedAt: '2026-09-14T08:00:00+03:00',
       kind: 'height',
@@ -36,7 +39,9 @@ const measurementCases = [
     },
   },
   {
+    acceptanceCriterion: 'AC-HT-002',
     name: 'weight',
+    loincCode: '29463-7',
     measurement: {
       observedAt: '2026-09-14T08:00:00+03:00',
       kind: 'weight',
@@ -55,13 +60,36 @@ type MedplumTestBackend = {
 
 type AccessFixture = {
   readonly medplum: MedplumTestBackend;
+  readonly cleanupClient: MedplumClient;
   readonly patientId: string;
   readonly otherPatientId: string;
 };
 
+type MockTransactionOutcome = 'success' | 'invalid' | 'rate-limited' | 'unavailable' | 'unconfirmed';
+
+type HttpTestResult = {
+  readonly request: {
+    readonly method: 'POST';
+    readonly url: string;
+    readonly headers: {
+      readonly authorization: string;
+      readonly 'content-type': 'application/json';
+    };
+    readonly body: unknown;
+  };
+  readonly response: Response;
+  readonly responseBody: unknown;
+};
+
+type MockResponse = {
+  readonly statusCode: number;
+  readonly data: object;
+  readonly responseOptions: typeof fhirResponse;
+};
+
 type FhirResourceFixture = {
   readonly client: MedplumClient;
-  readonly resourceType: 'Observation' | 'Patient' | 'ProjectMembership' | 'RelatedPerson' | 'User';
+  readonly resourceType: 'Observation' | 'Patient' | 'ProjectMembership' | 'Provenance' | 'RelatedPerson' | 'User';
   readonly id: string;
 };
 
@@ -75,9 +103,9 @@ afterEach(async () => {
 
 describe('Health Tracking HTTP API', () => {
   test.each(measurementCases)('records a $name measurement for the intended member over HTTP', async (testCase) => {
-    await allure.story('DI-1');
+    await allure.story(testCase.acceptanceCriterion);
 
-    const { medplum, patientId, otherPatientId } = await getAccessFixture();
+    const { medplum, cleanupClient, patientId, otherPatientId } = await getAccessFixture();
     await allure.parameter('Medplum backend', medplum.mode);
     const actor = await medplum.client.getProfileAsync();
     if (!actor) {
@@ -123,7 +151,7 @@ describe('Health Tracking HTTP API', () => {
       patientId,
       ...testCase.measurement,
     } as const;
-    fhirResourcesToDelete.push({ client: medplum.client, resourceType: 'Observation', id: measurement.id });
+    fhirResourcesToDelete.push({ client: cleanupClient, resourceType: 'Observation', id: measurement.id });
 
     const healthTrackingServer = await listen(
       createServer(createHealthTrackingHttpApp({ medplumBaseUrl: medplum.baseUrl }))
@@ -149,6 +177,15 @@ describe('Health Tracking HTTP API', () => {
     const responseBody: unknown = await response.json();
 
     const observation = await medplum.client.readResource('Observation', measurement.id);
+    const provenances = await medplum.client.searchResources('Provenance', {
+      target: `Observation/${measurement.id}`,
+    });
+    expect(provenances).toHaveLength(1);
+    const provenance = provenances[0];
+    if (!provenance?.id) {
+      throw new Error('The recorder Provenance was not committed with the Observation');
+    }
+    fhirResourcesToDelete.push({ client: cleanupClient, resourceType: 'Provenance', id: provenance.id });
 
     await allure.attachment(
       'HTTP API evidence',
@@ -159,6 +196,7 @@ describe('Health Tracking HTTP API', () => {
           request: apiRequest,
           response: { status: response.status, body: responseBody },
           persistedObservation: observation,
+          persistedProvenance: provenance,
         },
         null,
         2
@@ -172,6 +210,11 @@ describe('Health Tracking HTTP API', () => {
       resourceType: 'Observation',
       id: measurement.id,
       subject: { reference: `Patient/${patientId}` },
+      code: {
+        coding: expect.arrayContaining([
+          expect.objectContaining({ system: 'http://loinc.org', code: testCase.loincCode }),
+        ]),
+      },
       effectiveDateTime: measurement.observedAt,
       valueQuantity: {
         value: measurement.value,
@@ -180,8 +223,161 @@ describe('Health Tracking HTTP API', () => {
         code: measurement.unit,
       },
     });
+    expect(provenance).toMatchObject({
+      target: expect.arrayContaining([{ reference: `Observation/${measurement.id}` }]),
+      occurredDateTime: measurement.observedAt,
+      agent: expect.arrayContaining([
+        expect.objectContaining({ who: { reference: `${actor.resourceType}/${actor.id}` } }),
+      ]),
+    });
+  });
+
+  test('rejects an invalid measurement without reporting it as recorded', async () => {
+    await allure.story('AC-HT-003');
+    const { medplum, patientId } = await createMockAccessFixture();
+
+    const result = await postMeasurement(medplum, {
+      ...validWeightMeasurement(patientId),
+      value: 0,
+    });
+    await attachHttpEvidence('Invalid measurement evidence', result);
+
+    expect(result.response.status).toBe(400);
+    expect(result.responseBody).toEqual({
+      type: 'MEASUREMENT_REJECTED',
+      payload: { reason: 'INVALID_MEASUREMENT' },
+    });
+  });
+
+  test('rejects a measurement for a member outside the recorder access policy', async () => {
+    await allure.story('AC-HT-003');
+    const { medplum, otherPatientId } = await createMockAccessFixture();
+
+    const result = await postMeasurement(medplum, validWeightMeasurement(otherPatientId));
+    await attachHttpEvidence('Not permitted evidence', result);
+
+    expect(result.response.status).toBe(403);
+    expect(result.responseBody).toEqual({
+      type: 'MEASUREMENT_REJECTED',
+      payload: { reason: 'NOT_PERMITTED' },
+    });
+  });
+
+  test('translates Medplum FHIR validation refusal into a rejected measurement', async () => {
+    await allure.story('AC-HT-003');
+    const { medplum, patientId } = await createMockAccessFixture('invalid');
+
+    const result = await postMeasurement(medplum, validWeightMeasurement(patientId));
+    await attachHttpEvidence('FHIR validation evidence', result);
+
+    expect(result.response.status).toBe(400);
+    expect(result.responseBody).toEqual({
+      type: 'MEASUREMENT_REJECTED',
+      payload: { reason: 'INVALID_MEASUREMENT' },
+    });
+  });
+
+  test.each([
+    { medplumStatus: 429, outcome: 'rate-limited' },
+    { medplumStatus: 500, outcome: 'unavailable' },
+  ] as const)('reports a known Medplum $medplumStatus failure without reporting a commit', async (testCase) => {
+    await allure.story('AC-HT-003');
+    const { medplum, patientId } = await createMockAccessFixture(testCase.outcome);
+
+    const result = await postMeasurement(medplum, validWeightMeasurement(patientId));
+    await attachHttpEvidence(`Medplum ${testCase.medplumStatus} evidence`, result);
+
+    expect(result.response.status).toBe(503);
+    expect(result.responseBody).toEqual({
+      type: 'MEASUREMENT_RECORDING_FAILED',
+      payload: { reason: 'RECORD_UNAVAILABLE' },
+    });
+  });
+
+  test('reports an unconfirmed outcome when the Medplum transaction response is lost', async () => {
+    await allure.story('AC-HT-003');
+    const { medplum, patientId } = await createMockAccessFixture('unconfirmed');
+
+    const result = await postMeasurement(medplum, validWeightMeasurement(patientId));
+    await attachHttpEvidence('Unconfirmed transaction evidence', result);
+
+    expect(result.response.status).toBe(503);
+    expect(result.responseBody).toEqual({
+      type: 'MEASUREMENT_RECORDING_UNCONFIRMED',
+      payload: { reason: 'OUTCOME_UNKNOWN' },
+    });
+  });
+
+  test.each([
+    { authentication: 'missing', bearerToken: null },
+    { authentication: 'invalid', bearerToken: 'invalid-token' },
+  ])('rejects a $authentication bearer token before recording a measurement', async (testCase) => {
+    await allure.story('DI-1 authentication boundary');
+    const { medplum, patientId } = await createMockAccessFixture();
+
+    const result = await postMeasurement(medplum, validWeightMeasurement(patientId), testCase.bearerToken);
+    await attachHttpEvidence(`${testCase.authentication} bearer token evidence`, result);
+
+    expect(result.response.status).toBe(401);
+    expect(result.responseBody).toMatchObject({ resourceType: 'OperationOutcome' });
   });
 });
+
+const validWeightMeasurement = (patientId: string): Measurement => {
+  return {
+    id: `weight-${randomUUID()}`,
+    patientId,
+    observedAt: '2026-09-14T08:00:00+03:00',
+    kind: 'weight',
+    value: 32.4,
+    unit: 'kg',
+  } as const;
+};
+
+const postMeasurement = async (
+  medplum: MedplumTestBackend,
+  body: unknown,
+  bearerToken: string | null = medplum.accessToken
+): Promise<HttpTestResult> => {
+  const healthTrackingServer = await listen(
+    createServer(createHealthTrackingHttpApp({ medplumBaseUrl: medplum.baseUrl }))
+  );
+  const request = {
+    method: 'POST',
+    url: new URL('measurements', healthTrackingServer.url).toString(),
+    headers: {
+      authorization: bearerToken ? '[REDACTED]' : '[ABSENT]',
+      'content-type': 'application/json',
+    },
+    body,
+  } as const;
+  const headers: Record<string, string> = { 'content-type': request.headers['content-type'] };
+  if (bearerToken) {
+    headers.authorization = `Bearer ${bearerToken}`;
+  }
+  const response = await fetch(request.url, {
+    method: request.method,
+    headers,
+    body: JSON.stringify(request.body),
+  });
+  const responseBody: unknown = await response.json();
+  return { request, response, responseBody };
+};
+
+async function attachHttpEvidence(title: string, result: Awaited<ReturnType<typeof postMeasurement>>): Promise<void> {
+  await allure.attachment(
+    title,
+    JSON.stringify(
+      {
+        request: result.request,
+        response: { status: result.response.status, body: result.responseBody },
+      },
+      null,
+      2
+    ),
+    { contentType: 'application/json' }
+  );
+}
 
 async function getAccessFixture(): Promise<AccessFixture> {
   if (process.env['HEALTH_TRACKING_MEDPLUM_MODE'] === 'mock') {
@@ -243,15 +439,18 @@ async function createLiveAccessFixture(): Promise<AccessFixture> {
       accessToken,
       client: actorClient,
     }),
+    cleanupClient: admin,
     patientId,
     otherPatientId,
   };
 }
 
-async function createMockAccessFixture(): Promise<AccessFixture> {
+async function createMockAccessFixture(transactionOutcome: MockTransactionOutcome = 'success'): Promise<AccessFixture> {
   const baseUrl = 'http://medplum.test/';
+  const actorAccessToken = createTestAccessToken('caregiver-login');
   const patients = new Map<string, unknown>();
   const observations = new Map<string, unknown>();
+  const provenances = new Map<string, unknown>();
   let authorizedPatientId: string | undefined;
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
@@ -261,35 +460,44 @@ async function createMockAccessFixture(): Promise<AccessFixture> {
 
   medplum
     .intercept({ method: 'GET', path: '/auth/me' })
-    .reply(() => ({
-      statusCode: 200,
-      data: {
-        project: { resourceType: 'Project', id: 'health-tracking-project', name: 'Health Tracking Acceptance' },
-        membership: {
-          resourceType: 'ProjectMembership',
-          id: 'caregiver-membership',
-          profile: { reference: 'RelatedPerson/parent-1' },
+    .reply(({ headers }): MockResponse => {
+      if (new Headers(headers).get('authorization') !== `Bearer ${actorAccessToken}`) {
+        return operationOutcomeResponse(401, 'login');
+      }
+      return {
+        statusCode: 200,
+        data: {
+          project: { resourceType: 'Project', id: 'health-tracking-project', name: 'Health Tracking Acceptance' },
+          membership: {
+            resourceType: 'ProjectMembership',
+            id: 'caregiver-membership',
+            profile: { reference: 'RelatedPerson/parent-1' },
+          },
+          profile: {
+            resourceType: 'RelatedPerson',
+            id: 'parent-1',
+            patient: { reference: `Patient/${authorizedPatientId}` },
+          },
+          config: { resourceType: 'UserConfiguration' },
+          accessPolicy: {
+            resourceType: 'AccessPolicy',
+            basedOn: [{ reference: 'AccessPolicy/default-related-person' }],
+            resource: [
+              { resourceType: 'Patient', criteria: `Patient?_id=${authorizedPatientId}` },
+              {
+                resourceType: 'Observation',
+                criteria: `Observation?_compartment=Patient/${authorizedPatientId}`,
+              },
+              {
+                resourceType: 'Provenance',
+                criteria: `Provenance?_compartment=Patient/${authorizedPatientId}`,
+              },
+            ],
+          },
         },
-        profile: {
-          resourceType: 'RelatedPerson',
-          id: 'parent-1',
-          patient: { reference: `Patient/${authorizedPatientId}` },
-        },
-        config: { resourceType: 'UserConfiguration' },
-        accessPolicy: {
-          resourceType: 'AccessPolicy',
-          basedOn: [{ reference: 'AccessPolicy/default-related-person' }],
-          resource: [
-            { resourceType: 'Patient', criteria: `Patient?_id=${authorizedPatientId}` },
-            {
-              resourceType: 'Observation',
-              criteria: `Observation?_compartment=Patient/${authorizedPatientId}`,
-            },
-          ],
-        },
-      },
-      responseOptions: fhirResponse,
-    }))
+        responseOptions: fhirResponse,
+      };
+    })
     .persist();
   medplum
     .intercept({ method: 'POST', path: '/fhir/R4/Patient' })
@@ -315,29 +523,81 @@ async function createMockAccessFixture(): Promise<AccessFixture> {
           };
     })
     .persist();
+  const transaction = medplum.intercept({ method: 'POST', path: '/fhir/R4' });
+  if (transactionOutcome === 'unconfirmed') {
+    transaction.replyWithError(new Error('Medplum transaction response lost')).persist();
+  } else {
+    transaction
+      .reply(({ body }): MockResponse => {
+        if (transactionOutcome === 'invalid') {
+          return operationOutcomeResponse(400, 'invalid');
+        }
+        if (transactionOutcome === 'rate-limited') {
+          return operationOutcomeResponse(429, 'throttled');
+        }
+        if (transactionOutcome === 'unavailable') {
+          return operationOutcomeResponse(500, 'transient');
+        }
+
+        const observation = transactionResource(parseRequestBody(body), 'Observation');
+        const subject = isRecord(observation?.subject) ? observation.subject.reference : undefined;
+        if (subject !== `Patient/${authorizedPatientId}`) {
+          return operationOutcomeResponse(403, 'forbidden');
+        }
+        const observationId = typeof observation?.id === 'string' ? observation.id : undefined;
+        if (observationId) {
+          observations.set(observationId, observation);
+        }
+        const provenance = transactionResource(parseRequestBody(body), 'Provenance');
+        const provenanceId = typeof provenance?.id === 'string' ? provenance.id : undefined;
+        if (provenanceId) {
+          provenances.set(provenanceId, provenance);
+        }
+        return {
+          statusCode: 200,
+          data: { resourceType: 'Bundle', type: 'transaction-response' },
+          responseOptions: fhirResponse,
+        };
+      })
+      .persist();
+  }
   medplum
-    .intercept({ method: 'POST', path: '/fhir/R4' })
-    .reply(({ body }) => {
-      const observation = transactionResource(parseRequestBody(body), 'Observation');
-      const id = typeof observation?.id === 'string' ? observation.id : undefined;
-      if (id) {
-        observations.set(id, observation);
+    .intercept({ method: 'DELETE', path: /^\/fhir\/R4\/(Observation|Patient|Provenance)\/[^/?]+$/ })
+    .reply(({ path }) => {
+      const [, resourceType, id] = path.match(/^\/fhir\/R4\/(Observation|Patient|Provenance)\/([^/?]+)$/) ?? [];
+      let deleted: boolean;
+      if (resourceType === 'Observation') {
+        deleted = observations.delete(id);
+      } else if (resourceType === 'Provenance') {
+        deleted = provenances.delete(id);
+      } else {
+        deleted = patients.delete(id);
       }
       return {
-        statusCode: 200,
-        data: { resourceType: 'Bundle', type: 'transaction-response' },
+        statusCode: deleted ? 204 : 404,
+        data: deleted ? undefined : { resourceType: 'OperationOutcome', id: 'not-found', issue: [] },
         responseOptions: fhirResponse,
       };
     })
     .persist();
   medplum
-    .intercept({ method: 'DELETE', path: /^\/fhir\/R4\/(Observation|Patient)\/[^/?]+$/ })
+    .intercept({ method: 'GET', path: /^\/fhir\/R4\/Provenance\?target=/ })
     .reply(({ path }) => {
-      const [, resourceType, id] = path.match(/^\/fhir\/R4\/(Observation|Patient)\/([^/?]+)$/) ?? [];
-      const deleted = resourceType === 'Observation' ? observations.delete(id) : patients.delete(id);
+      const target = new URL(path, baseUrl).searchParams.get('target');
+      const matches = [...provenances.values()].filter(
+        (resource) =>
+          isRecord(resource) &&
+          Array.isArray(resource.target) &&
+          resource.target.some((reference) => isRecord(reference) && reference.reference === target)
+      );
       return {
-        statusCode: deleted ? 204 : 404,
-        data: deleted ? undefined : { resourceType: 'OperationOutcome', id: 'not-found', issue: [] },
+        statusCode: 200,
+        data: {
+          resourceType: 'Bundle',
+          type: 'searchset',
+          total: matches.length,
+          entry: matches.map((resource) => ({ resource })),
+        },
         responseOptions: fhirResponse,
       };
     })
@@ -364,14 +624,26 @@ async function createMockAccessFixture(): Promise<AccessFixture> {
     medplum: createMedplumTestBackend({
       mode: 'mock',
       baseUrl,
-      accessToken: createTestAccessToken('caregiver-login'),
+      accessToken: actorAccessToken,
     }),
+    cleanupClient: admin,
     patientId,
     otherPatientId,
   };
 }
 
 const fhirResponse = { headers: { 'content-type': 'application/fhir+json' } } as const;
+
+const operationOutcomeResponse = (statusCode: number, code: string): MockResponse => {
+  return {
+    statusCode,
+    data: {
+      resourceType: 'OperationOutcome',
+      issue: [{ severity: 'error', code }],
+    },
+    responseOptions: fhirResponse,
+  };
+};
 
 async function getOrCreateAcceptanceProject(admin: MedplumClient): Promise<Project & { id: string }> {
   const name = 'Health Tracking Acceptance';
