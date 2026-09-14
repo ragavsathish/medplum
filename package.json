@@ -16,7 +16,8 @@
     "lint:fix": "turbo run lint:fix --filter=!@medplum/docs",
     "prettier": "prettier --write \"**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,json}\"",
     "sort-package-json": "sort-package-json package.json \"packages/*/package.json\" \"examples/*/package.json\"",
-    "test": "turbo run test --filter=!@medplum/docs"
+    "test": "turbo run test --filter=!@medplum/docs",
+    "test:acceptance:health-tracking": "vitest run --config tests/acceptance/vitest.config.mts"
   },
   "prettier": {
     "plugins": [
@@ -47,6 +48,8 @@
     "@types/node": "22.20.1",
     "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "4.1.11",
+    "allure-js-commons": "^3.12.1",
+    "allure-vitest": "^3.12.1",
     "cross-env": "10.1.0",
     "esbuild": "0.28.2",
     "formidable": "3.5.4",
