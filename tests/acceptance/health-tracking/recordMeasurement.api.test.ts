@@ -12,19 +12,19 @@ import {
 } from '@medplum/core';
 import type { Project } from '@medplum/fhirtypes';
 import * as allure from 'allure-js-commons';
+import { http, HttpResponse } from 'msw';
+import { setupServer } from 'msw/node';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from 'undici';
 import { afterEach, describe, expect, test } from 'vitest';
 import type { Measurement } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/core/entities/measurement';
 import { createHealthTrackingHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
 
 const openServers: Server[] = [];
 const fhirResourcesToDelete: FhirResourceFixture[] = [];
-const liveDispatcher = getGlobalDispatcher();
-let mockAgent: MockAgent | undefined;
+let mockServer: ReturnType<typeof setupServer> | undefined;
 
 const measurementCases = [
   {
@@ -81,12 +81,6 @@ type HttpTestResult = {
   readonly responseBody: unknown;
 };
 
-type MockResponse = {
-  readonly statusCode: number;
-  readonly data: object;
-  readonly responseOptions: typeof fhirResponse;
-};
-
 type FhirResourceFixture = {
   readonly client: MedplumClient;
   readonly resourceType: 'Observation' | 'Patient' | 'ProjectMembership' | 'Provenance' | 'RelatedPerson' | 'User';
@@ -96,9 +90,8 @@ type FhirResourceFixture = {
 afterEach(async () => {
   await Promise.all(openServers.splice(0).map(closeServer));
   await cleanupFhirFixtures();
-  setGlobalDispatcher(liveDispatcher);
-  await mockAgent?.close();
-  mockAgent = undefined;
+  mockServer?.close();
+  mockServer = undefined;
 });
 
 describe('Health Tracking HTTP API', () => {
@@ -452,21 +445,13 @@ async function createMockAccessFixture(transactionOutcome: MockTransactionOutcom
   const observations = new Map<string, unknown>();
   const provenances = new Map<string, unknown>();
   let authorizedPatientId: string | undefined;
-  mockAgent = new MockAgent();
-  mockAgent.disableNetConnect();
-  mockAgent.enableNetConnect(/^127\.0\.0\.1:\d+$/);
-  setGlobalDispatcher(mockAgent);
-  const medplum = mockAgent.get(new URL(baseUrl).origin);
-
-  medplum
-    .intercept({ method: 'GET', path: '/auth/me' })
-    .reply(({ headers }): MockResponse => {
-      if (new Headers(headers).get('authorization') !== `Bearer ${actorAccessToken}`) {
-        return operationOutcomeResponse(401, 'login');
+  mockServer = setupServer(
+    http.get(`${baseUrl}auth/me`, ({ request }) => {
+      if (request.headers.get('authorization') !== `Bearer ${actorAccessToken}`) {
+        return fhirOutcome(401, 'login');
       }
-      return {
-        statusCode: 200,
-        data: {
+      return HttpResponse.json(
+        {
           project: { resourceType: 'Project', id: 'health-tracking-project', name: 'Health Tracking Acceptance' },
           membership: {
             resourceType: 'ProjectMembership',
@@ -495,76 +480,55 @@ async function createMockAccessFixture(transactionOutcome: MockTransactionOutcom
             ],
           },
         },
-        responseOptions: fhirResponse,
-      };
-    })
-    .persist();
-  medplum
-    .intercept({ method: 'POST', path: '/fhir/R4/Patient' })
-    .reply(({ body }) => {
+        { headers: fhirHeaders }
+      );
+    }),
+    http.post(`${baseUrl}fhir/R4/Patient`, async ({ request }) => {
       const id = randomUUID();
-      const patient = { ...asRecord(parseRequestBody(body)), id };
+      const patient = { ...asRecord(await request.json()), id };
       patients.set(id, patient);
       authorizedPatientId ??= id;
-      return { statusCode: 201, data: patient, responseOptions: fhirResponse };
-    })
-    .times(2);
-  medplum
-    .intercept({ method: 'GET', path: /^\/fhir\/R4\/Patient\/[^/?]+$/ })
-    .reply(({ path }) => {
-      const patientId = path.match(/^\/fhir\/R4\/Patient\/([^/?]+)$/)?.[1];
+      return HttpResponse.json(patient, { status: 201, headers: fhirHeaders });
+    }),
+    http.get(`${baseUrl}fhir/R4/Patient/:id`, ({ params }) => {
+      const patientId = String(params['id']);
       const patient = patientId && patientId === authorizedPatientId ? patients.get(patientId) : undefined;
-      return patient
-        ? { statusCode: 200, data: patient, responseOptions: fhirResponse }
-        : {
-            statusCode: 404,
-            data: { resourceType: 'OperationOutcome', id: 'not-found', issue: [] },
-            responseOptions: fhirResponse,
-          };
-    })
-    .persist();
-  const transaction = medplum.intercept({ method: 'POST', path: '/fhir/R4' });
-  if (transactionOutcome === 'unconfirmed') {
-    transaction.replyWithError(new Error('Medplum transaction response lost')).persist();
-  } else {
-    transaction
-      .reply(({ body }): MockResponse => {
-        if (transactionOutcome === 'invalid') {
-          return operationOutcomeResponse(400, 'invalid');
-        }
-        if (transactionOutcome === 'rate-limited') {
-          return operationOutcomeResponse(429, 'throttled');
-        }
-        if (transactionOutcome === 'unavailable') {
-          return operationOutcomeResponse(500, 'transient');
-        }
+      return patient ? HttpResponse.json(patient, { headers: fhirHeaders }) : fhirOutcome(404, 'not-found');
+    }),
+    http.post(`${baseUrl}fhir/R4`, async ({ request }) => {
+      if (transactionOutcome === 'unconfirmed') {
+        return HttpResponse.error();
+      }
+      if (transactionOutcome === 'invalid') {
+        return fhirOutcome(400, 'invalid');
+      }
+      if (transactionOutcome === 'rate-limited') {
+        return fhirOutcome(429, 'throttled');
+      }
+      if (transactionOutcome === 'unavailable') {
+        return fhirOutcome(500, 'transient');
+      }
 
-        const observation = transactionResource(parseRequestBody(body), 'Observation');
-        const subject = isRecord(observation?.subject) ? observation.subject.reference : undefined;
-        if (subject !== `Patient/${authorizedPatientId}`) {
-          return operationOutcomeResponse(403, 'forbidden');
-        }
-        const observationId = typeof observation?.id === 'string' ? observation.id : undefined;
-        if (observationId) {
-          observations.set(observationId, observation);
-        }
-        const provenance = transactionResource(parseRequestBody(body), 'Provenance');
-        const provenanceId = typeof provenance?.id === 'string' ? provenance.id : undefined;
-        if (provenanceId) {
-          provenances.set(provenanceId, provenance);
-        }
-        return {
-          statusCode: 200,
-          data: { resourceType: 'Bundle', type: 'transaction-response' },
-          responseOptions: fhirResponse,
-        };
-      })
-      .persist();
-  }
-  medplum
-    .intercept({ method: 'DELETE', path: /^\/fhir\/R4\/(Observation|Patient|Provenance)\/[^/?]+$/ })
-    .reply(({ path }) => {
-      const [, resourceType, id] = path.match(/^\/fhir\/R4\/(Observation|Patient|Provenance)\/([^/?]+)$/) ?? [];
+      const body: unknown = await request.json();
+      const observation = transactionResource(body, 'Observation');
+      const subject = isRecord(observation?.subject) ? observation.subject.reference : undefined;
+      if (subject !== `Patient/${authorizedPatientId}`) {
+        return fhirOutcome(403, 'forbidden');
+      }
+      const observationId = typeof observation?.id === 'string' ? observation.id : undefined;
+      if (observationId) {
+        observations.set(observationId, observation);
+      }
+      const provenance = transactionResource(body, 'Provenance');
+      const provenanceId = typeof provenance?.id === 'string' ? provenance.id : undefined;
+      if (provenanceId) {
+        provenances.set(provenanceId, provenance);
+      }
+      return HttpResponse.json({ resourceType: 'Bundle', type: 'transaction-response' }, { headers: fhirHeaders });
+    }),
+    http.delete(`${baseUrl}fhir/R4/:resourceType/:id`, ({ params }) => {
+      const resourceType = String(params['resourceType']);
+      const id = String(params['id']);
       let deleted: boolean;
       if (resourceType === 'Observation') {
         deleted = observations.delete(id);
@@ -573,49 +537,33 @@ async function createMockAccessFixture(transactionOutcome: MockTransactionOutcom
       } else {
         deleted = patients.delete(id);
       }
-      return {
-        statusCode: deleted ? 204 : 404,
-        data: deleted ? undefined : { resourceType: 'OperationOutcome', id: 'not-found', issue: [] },
-        responseOptions: fhirResponse,
-      };
-    })
-    .persist();
-  medplum
-    .intercept({ method: 'GET', path: /^\/fhir\/R4\/Provenance\?target=/ })
-    .reply(({ path }) => {
-      const target = new URL(path, baseUrl).searchParams.get('target');
+      return deleted ? new HttpResponse(null, { status: 204, headers: fhirHeaders }) : fhirOutcome(404, 'not-found');
+    }),
+    http.get(`${baseUrl}fhir/R4/Provenance`, ({ request }) => {
+      const target = new URL(request.url).searchParams.get('target');
       const matches = [...provenances.values()].filter(
         (resource) =>
           isRecord(resource) &&
           Array.isArray(resource.target) &&
           resource.target.some((reference) => isRecord(reference) && reference.reference === target)
       );
-      return {
-        statusCode: 200,
-        data: {
+      return HttpResponse.json(
+        {
           resourceType: 'Bundle',
           type: 'searchset',
           total: matches.length,
           entry: matches.map((resource) => ({ resource })),
         },
-        responseOptions: fhirResponse,
-      };
-    })
-    .persist();
-  medplum
-    .intercept({ method: 'GET', path: /^\/fhir\/R4\/Observation\/[^/?]+$/ })
-    .reply(({ path }) => {
-      const observationId = path.match(/^\/fhir\/R4\/Observation\/([^/?]+)$/)?.[1];
+        { headers: fhirHeaders }
+      );
+    }),
+    http.get(`${baseUrl}fhir/R4/Observation/:id`, ({ params }) => {
+      const observationId = String(params['id']);
       const observation = observationId ? observations.get(observationId) : undefined;
-      return observation
-        ? { statusCode: 200, data: observation, responseOptions: fhirResponse }
-        : {
-            statusCode: 404,
-            data: { resourceType: 'OperationOutcome', id: 'not-found', issue: [] },
-            responseOptions: fhirResponse,
-          };
+      return observation ? HttpResponse.json(observation, { headers: fhirHeaders }) : fhirOutcome(404, 'not-found');
     })
-    .persist();
+  );
+  mockServer.listen({ onUnhandledRequest: 'bypass' });
 
   const admin = new MedplumClient({ baseUrl, accessToken: createTestAccessToken('admin-login') });
   const patientId = await seedTestPatient(admin, undefined, 'Assigned');
@@ -632,18 +580,13 @@ async function createMockAccessFixture(transactionOutcome: MockTransactionOutcom
   };
 }
 
-const fhirResponse = { headers: { 'content-type': 'application/fhir+json' } } as const;
+const fhirHeaders = { 'content-type': 'application/fhir+json' } as const;
 
-const operationOutcomeResponse = (statusCode: number, code: string): MockResponse => {
-  return {
-    statusCode,
-    data: {
-      resourceType: 'OperationOutcome',
-      issue: [{ severity: 'error', code }],
-    },
-    responseOptions: fhirResponse,
-  };
-};
+const fhirOutcome = (status: number, code: string): HttpResponse<object> =>
+  HttpResponse.json(
+    { resourceType: 'OperationOutcome', id: code, issue: [{ severity: 'error', code }] },
+    { status, headers: fhirHeaders }
+  );
 
 async function getOrCreateAcceptanceProject(admin: MedplumClient): Promise<Project & { id: string }> {
   const name = 'Health Tracking Acceptance';
@@ -761,16 +704,6 @@ async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-}
-
-function parseRequestBody(body: unknown): unknown {
-  if (typeof body === 'string') {
-    return JSON.parse(body);
-  }
-  if (body instanceof Uint8Array) {
-    return JSON.parse(Buffer.from(body).toString('utf8'));
-  }
-  return body;
 }
 
 function createTestAccessToken(loginId: string): string {
