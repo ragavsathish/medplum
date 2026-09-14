@@ -64,7 +64,10 @@ export const recordMeasurementOpenApiSchemas = {
         additionalProperties: false,
         required: ['reason'],
         properties: {
-          reason: { type: 'string', enum: [MEASUREMENT_FAILURE_REASONS.invalidMeasurement] },
+          reason: {
+            type: 'string',
+            enum: [MEASUREMENT_FAILURE_REASONS.invalidMeasurement, MEASUREMENT_FAILURE_REASONS.notPermitted],
+          },
         },
       },
     },
@@ -129,12 +132,7 @@ export const recordMeasurementOpenApiPath = {
         description: 'The request or FHIR data is invalid.',
         content: {
           'application/json': {
-            schema: {
-              oneOf: [
-                { $ref: '#/components/schemas/MeasurementRejected' },
-                { $ref: '#/components/schemas/OperationOutcome' },
-              ],
-            },
+            schema: { $ref: '#/components/schemas/MeasurementRejected' },
           },
         },
       },
@@ -150,7 +148,7 @@ export const recordMeasurementOpenApiPath = {
         description: 'Medplum denied access to the intended member record.',
         content: {
           'application/json': {
-            schema: { $ref: '#/components/schemas/OperationOutcome' },
+            schema: { $ref: '#/components/schemas/MeasurementRejected' },
           },
         },
       },
