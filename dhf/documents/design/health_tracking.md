@@ -35,9 +35,9 @@ are outside this design.
 
 ## Design input
 
-| ID     | Source      | Required result                                                                                                                   | Baseline acceptance criteria          |
-| ------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `DI-1` | `UN-HT-001` | Record one height or weight measurement for the intended member while preserving its identity, value, unit, and observation time. | `AC-HT-001`, `AC-HT-002`, `AC-HT-003` |
+| ID     | Source      | Required result                                                                                                                   | Baseline acceptance criteria                                                               |
+| ------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `DI-1` | `UN-HT-001` | Record one height or weight measurement for the intended member while preserving its identity, value, unit, and observation time. | [`AC-HT-001`–`AC-HT-003`](../requirements/health_tracking.md#baseline-acceptance-criteria) |
 
 `DI-1` is a baseline requirement, not a risk control.
 
@@ -133,10 +133,10 @@ access policy.
 
 ## Verification and traceability
 
-| Source                               | Design input | Design output                         | Verification status                                                    |
-| ------------------------------------ | ------------ | ------------------------------------- | ---------------------------------------------------------------------- |
-| `UN-HT-001`; `AC-HT-001`–`AC-HT-003` | `DI-1`       | Record Measurement flow and FHIR data | HTTP success-path evidence exists; independent review is not recorded. |
-| EventStorming failure outcomes       | —            | Record Measurement outcomes           | Development tests pass; formal acceptance evidence is not recorded.    |
+| Source                               | Design input | Design output                         | Verification status                                                                                        |
+| ------------------------------------ | ------------ | ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `UN-HT-001`; `AC-HT-001`–`AC-HT-003` | `DI-1`       | Record Measurement flow and FHIR data | Draft HTTP evidence covers Observation creation; Provenance and unsuccessful-outcome evidence are missing. |
+| EventStorming failure outcomes       | —            | Record Measurement outcomes           | Development tests pass; formal acceptance evidence is not recorded.                                        |
 
 ## Risk status
 
