@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { z } from 'zod';
 
+/** A domain measurement. FHIR mapping and persistence stay outside the core. */
 export const MEASUREMENT_KINDS = {
   height: 'height',
   weight: 'weight',
@@ -16,8 +17,8 @@ const MEASUREMENT_ERRORS = {
 } as const;
 
 const measurementBaseSchema = z.object({
-  id: z.string().min(1),
-  patientId: z.string().min(1),
+  id: z.string().uuid(),
+  patientId: z.string().uuid(),
   observedAt: z.string().datetime({ offset: true }),
 });
 
