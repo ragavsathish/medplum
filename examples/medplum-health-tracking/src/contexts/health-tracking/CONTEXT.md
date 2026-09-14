@@ -1,7 +1,7 @@
 # Health Tracking
 
-The bounded context for recording, correcting, and interpreting health and wellness measurements for one or more
-members.
+The bounded context for recording, synchronizing, correcting, and interpreting health and wellness measurements for
+one or more members.
 
 ## Language
 
@@ -55,6 +55,28 @@ not itself a measurement of the member.
 **Daily health capture**:
 
 A group of activity, sleep, and environmental measurements recorded together for one member.
+
+**Mobile health source**:
+
+A device-managed health store from which a person permits Health Tracking to read records.
+
+**Source record**:
+
+A mobile health record identified by its source. It may be added, changed, or retracted by that source.
+
+**Mobile health synchronization**:
+
+Reconciliation of permitted source records with the intended member's authoritative health record. Reading or saving
+a record locally does not make it synchronized.
+
+**Mobile health record synchronized**:
+
+A source record whose current state has been committed to the intended member's authoritative health record.
+
+**Source record retracted**:
+
+A source record reported as deleted by its mobile health source. Its synchronized representation is no longer current,
+while record history remains available.
 
 **Climate exposure**:
 
