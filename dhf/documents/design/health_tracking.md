@@ -7,9 +7,23 @@ satisfies:
 design_inputs:
   - id: DI-1
     text: >-
-      The Health Tracking server shall accept a valid Record Measurement
-      request and store it as a FHIR Observation associated with the intended
-      member.
+      The Health Tracking server shall record a valid height measurement as a
+      FHIR Observation with recorder Provenance for the intended member and
+      shall report Measurement Recorded only after both resources are committed.
+    traces_to:
+      - UN-HT-001
+  - id: DI-2
+    text: >-
+      The Health Tracking server shall record a valid weight measurement as a
+      FHIR Observation with recorder Provenance for the intended member and
+      shall report Measurement Recorded only after both resources are committed.
+    traces_to:
+      - UN-HT-001
+  - id: DI-3
+    text: >-
+      The Health Tracking server shall not report Measurement Recorded when
+      commit is unconfirmed and shall report the rejected, failed, or
+      unconfirmed outcome corresponding to the known result.
     traces_to:
       - UN-HT-001
 ---
@@ -45,12 +59,13 @@ second bounded context.
 
 ## Design input
 
-| ID     | Traces to   | Meaning                                                                               | Baseline acceptance criteria          |
-| ------ | ----------- | ------------------------------------------------------------------------------------- | ------------------------------------- |
-| `DI-1` | `UN-HT-001` | Process a valid Record Measurement request and persist the resulting clinical record. | `AC-HT-001`, `AC-HT-002`, `AC-HT-003` |
+| ID     | Traces to   | Required result                                       | Baseline acceptance criterion |
+| ------ | ----------- | ----------------------------------------------------- | ----------------------------- |
+| `DI-1` | `UN-HT-001` | Record a height Observation and recorder Provenance.  | `AC-HT-001`                   |
+| `DI-2` | `UN-HT-001` | Record a weight Observation and recorder Provenance.  | `AC-HT-002`                   |
+| `DI-3` | `UN-HT-001` | Return the outcome supported by the confirmed result. | `AC-HT-003`                   |
 
-`DI-1` is derived from the baseline user need. It is not a risk-control
-requirement.
+`DI-1`–`DI-3` are derived from the baseline user need. They are not risk-control requirements.
 
 The request and response payloads are defined by the OpenAPI entities and are
 not repeated in this SDD.
@@ -193,10 +208,12 @@ safety or STRIDE risk is controlled.
 
 ## Verification and traceability
 
-| Source                               | Design input | Design output                          | Verification status                        |
-| ------------------------------------ | ------------ | -------------------------------------- | ------------------------------------------ |
-| `UN-HT-001`; `AC-HT-001`–`AC-HT-003` | `DI-1`       | Record Measurement design elements     | Not verified in this design-only revision. |
-| EventStorming failure outcomes       | —            | Typed command and persistence outcomes | Not verified in this design-only revision. |
+| Source                   | Design input | Design output                          | Verification status                        |
+| ------------------------ | ------------ | -------------------------------------- | ------------------------------------------ |
+| `UN-HT-001`; `AC-HT-001` | `DI-1`       | Height Observation and Provenance      | Not verified in this design-only revision. |
+| `UN-HT-001`; `AC-HT-002` | `DI-2`       | Weight Observation and Provenance      | Not verified in this design-only revision. |
+| `UN-HT-001`; `AC-HT-003` | `DI-3`       | Typed command and persistence outcomes | Not verified in this design-only revision. |
+| EventStorming outcomes   | —            | Domain outcome vocabulary              | Not verified in this design-only revision. |
 
 Acceptance evidence and independent review are required before this design can
 be claimed as verified.

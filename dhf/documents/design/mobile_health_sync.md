@@ -5,24 +5,66 @@ context: health-tracking
 satisfies:
   - UN-HT-002
 design_inputs:
-  - id: DI-2
-    text: >-
-      The Health Tracking system shall synchronize permitted step-count records
-      and sleep sessions from a connected mobile health source to the intended
-      member's Medplum health record.
-    traces_to:
-      - UN-HT-002
-  - id: DI-3
-    text: >-
-      The Health Tracking system shall apply available source additions,
-      changes, and deletions without duplicating unchanged records and shall
-      continue safely after an incomplete synchronization.
-    traces_to:
-      - UN-HT-002
   - id: DI-4
+    text: >-
+      The Health Tracking system shall synchronize a permitted step-count record
+      to the intended member's Medplum health record.
+    traces_to:
+      - UN-HT-002
+  - id: DI-5
+    text: >-
+      The Health Tracking system shall synchronize a permitted sleep session to
+      the intended member's Medplum health record.
+    traces_to:
+      - UN-HT-002
+  - id: DI-6
+    text: >-
+      The Health Tracking system shall preserve the count and observed period of
+      a synchronized step-count record.
+    traces_to:
+      - UN-HT-002
+  - id: DI-7
+    text: >-
+      The Health Tracking system shall preserve the observed period and total
+      duration of a synchronized sleep session.
+    traces_to:
+      - UN-HT-002
+  - id: DI-8
+    text: >-
+      When a source provides sleep stages, the Health Tracking system shall
+      preserve each stage's type and observed period.
+    traces_to:
+      - UN-HT-002
+  - id: DI-9
+    text: >-
+      The Health Tracking system shall reconcile an unchanged source record
+      without creating another logical health record.
+    traces_to:
+      - UN-HT-002
+  - id: DI-10
+    text: >-
+      The Health Tracking system shall apply available source additions and
+      changes and shall ensure that a source record reported as deleted is no
+      longer presented as current.
+    traces_to:
+      - UN-HT-002
+  - id: DI-11
+    text: >-
+      The Health Tracking system shall continue an interrupted or incomplete
+      synchronization without losing accepted records or duplicating unchanged
+      records.
+    traces_to:
+      - UN-HT-002
+  - id: DI-12
     text: >-
       The Health Tracking system shall report whether synchronization completed
       and identify records that were not synchronized.
+    traces_to:
+      - UN-HT-002
+  - id: DI-13
+    text: >-
+      The Health Tracking system shall synchronize only the record types and
+      history made available by the person's mobile health permissions.
     traces_to:
       - UN-HT-002
 ---
@@ -47,11 +89,18 @@ The API request and response payloads belong to the OpenAPI entities and are not
 
 ## Design inputs
 
-| ID     | Required result                                                | Baseline acceptance criteria         |
-| ------ | -------------------------------------------------------------- | ------------------------------------ |
-| `DI-2` | Synchronize permitted steps and sleep for the intended member. | `AC-HT-004`–`AC-HT-008`, `AC-HT-013` |
-| `DI-3` | Reconcile source changes and recover from interruption.        | `AC-HT-009`–`AC-HT-011`              |
-| `DI-4` | Make synchronization completion and exceptions visible.        | `AC-HT-012`                          |
+| ID      | Required result                                        | Baseline acceptance criterion |
+| ------- | ------------------------------------------------------ | ----------------------------- |
+| `DI-4`  | Synchronize a permitted step-count record.             | `AC-HT-004`                   |
+| `DI-5`  | Synchronize a permitted sleep session.                 | `AC-HT-005`                   |
+| `DI-6`  | Preserve the step count and observed period.           | `AC-HT-006`                   |
+| `DI-7`  | Preserve the sleep period and total duration.          | `AC-HT-007`                   |
+| `DI-8`  | Preserve available sleep-stage type and period.        | `AC-HT-008`                   |
+| `DI-9`  | Reconcile an unchanged record without duplication.     | `AC-HT-009`                   |
+| `DI-10` | Reconcile source additions, changes, and deletions.    | `AC-HT-010`                   |
+| `DI-11` | Continue an interrupted or incomplete synchronization. | `AC-HT-011`                   |
+| `DI-12` | Report synchronization completion and exceptions.      | `AC-HT-012`                   |
+| `DI-13` | Remain within the person's mobile health permissions.  | `AC-HT-013`                   |
 
 These are baseline design inputs. They are not risk controls.
 
@@ -200,11 +249,18 @@ record. Both decisions are required.
 
 ## Traceability
 
-| Source                                            | Design input | Design output                                                  | Verification status |
-| ------------------------------------------------- | ------------ | -------------------------------------------------------------- | ------------------- |
-| `UN-HT-002`; `AC-HT-004`–`AC-HT-008`, `AC-HT-013` | `DI-2`       | Source reader, sync handler, and FHIR projection               | Not verified.       |
-| `UN-HT-002`; `AC-HT-009`–`AC-HT-011`              | `DI-3`       | Stable source identity, sync journal, and acknowledgement rule | Not verified.       |
-| `UN-HT-002`; `AC-HT-012`                          | `DI-4`       | Per-record and overall outcomes                                | Not verified.       |
+| Source                   | Design input | Design output                           | Verification status |
+| ------------------------ | ------------ | --------------------------------------- | ------------------- |
+| `UN-HT-002`; `AC-HT-004` | `DI-4`       | Step-count synchronization              | Not verified.       |
+| `UN-HT-002`; `AC-HT-005` | `DI-5`       | Sleep-session synchronization           | Not verified.       |
+| `UN-HT-002`; `AC-HT-006` | `DI-6`       | Step-count FHIR projection              | Not verified.       |
+| `UN-HT-002`; `AC-HT-007` | `DI-7`       | Sleep-duration FHIR projection          | Not verified.       |
+| `UN-HT-002`; `AC-HT-008` | `DI-8`       | Sleep-stage FHIR projection             | Design unresolved.  |
+| `UN-HT-002`; `AC-HT-009` | `DI-9`       | Stable source identity                  | Not verified.       |
+| `UN-HT-002`; `AC-HT-010` | `DI-10`      | Addition, change, and deletion handling | Not verified.       |
+| `UN-HT-002`; `AC-HT-011` | `DI-11`      | Sync journal and acknowledgement rule   | Not verified.       |
+| `UN-HT-002`; `AC-HT-012` | `DI-12`      | Per-record and overall outcomes         | Not verified.       |
+| `UN-HT-002`; `AC-HT-013` | `DI-13`      | Per-type mobile permission boundary     | Not verified.       |
 
 ## Risk-analysis boundary
 

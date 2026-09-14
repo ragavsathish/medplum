@@ -15,11 +15,11 @@ authoritative health record contains the measurement identity, value, unit, and 
 
 ## Baseline acceptance criteria
 
-| ID          | Acceptance criterion                                                                                                                                                                                                                                                                                                                              |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AC-HT-001` | Given a permitted recorder and an intended member, when the recorder submits a valid height measurement, the authoritative record contains a height Observation and its recorder Provenance with the submitted identifier, member, value, unit, and observation time. `Measurement Recorded` is returned only after both resources are committed. |
-| `AC-HT-002` | Given a permitted recorder and an intended member, when the recorder submits a valid weight measurement, the authoritative record contains a weight Observation and its recorder Provenance with the submitted identifier, member, value, unit, and observation time. `Measurement Recorded` is returned only after both resources are committed. |
-| `AC-HT-003` | When a Record Measurement request is not confirmed as committed, the service does not return `Measurement Recorded`; it returns `Measurement Rejected`, `Measurement Recording Failed`, or `Measurement Recording Unconfirmed` according to the known outcome.                                                                                    |
+| ID          | Acceptance criterion                                                                                                                                                                                                                                                                                                                              | Design input |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `AC-HT-001` | Given a permitted recorder and an intended member, when the recorder submits a valid height measurement, the authoritative record contains a height Observation and its recorder Provenance with the submitted identifier, member, value, unit, and observation time. `Measurement Recorded` is returned only after both resources are committed. | `DI-1`       |
+| `AC-HT-002` | Given a permitted recorder and an intended member, when the recorder submits a valid weight measurement, the authoritative record contains a weight Observation and its recorder Provenance with the submitted identifier, member, value, unit, and observation time. `Measurement Recorded` is returned only after both resources are committed. | `DI-2`       |
+| `AC-HT-003` | When a Record Measurement request is not confirmed as committed, the service does not return `Measurement Recorded`; it returns `Measurement Rejected`, `Measurement Recording Failed`, or `Measurement Recording Unconfirmed` according to the known outcome.                                                                                    | `DI-3`       |
 
 These criteria are derived directly from `UN-HT-001`. No risk-derived acceptance criterion is included.
 
@@ -31,18 +31,18 @@ count and sleep.
 
 ### Baseline acceptance criteria
 
-| ID          | Acceptance criterion                                                                                                                                |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AC-HT-004` | Given an intended member and permitted step-count data, synchronization records the step count for that member.                                     |
-| `AC-HT-005` | Given an intended member and permitted sleep data, synchronization records the sleep session for that member.                                       |
-| `AC-HT-006` | A synchronized step-count record retains its count and observed period.                                                                             |
-| `AC-HT-007` | A synchronized sleep session retains its observed period and total duration.                                                                        |
-| `AC-HT-008` | When a source provides sleep stages, each synchronized stage retains its type and observed period.                                                  |
-| `AC-HT-009` | Repeating synchronization does not create another record for an unchanged source record.                                                            |
-| `AC-HT-010` | A later synchronization reflects available source additions and changes, and a source record reported as deleted is no longer presented as current. |
-| `AC-HT-011` | An interrupted or incomplete synchronization can continue without losing accepted records or duplicating unchanged records.                         |
-| `AC-HT-012` | The user can determine whether synchronization completed and whether any records were not synchronized.                                             |
-| `AC-HT-013` | Synchronization is limited to the record types and history made available by the person's mobile health permissions.                                |
+| ID          | Acceptance criterion                                                                                                                                | Design input |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `AC-HT-004` | Given an intended member and permitted step-count data, synchronization records the step count for that member.                                     | `DI-4`       |
+| `AC-HT-005` | Given an intended member and permitted sleep data, synchronization records the sleep session for that member.                                       | `DI-5`       |
+| `AC-HT-006` | A synchronized step-count record retains its count and observed period.                                                                             | `DI-6`       |
+| `AC-HT-007` | A synchronized sleep session retains its observed period and total duration.                                                                        | `DI-7`       |
+| `AC-HT-008` | When a source provides sleep stages, each synchronized stage retains its type and observed period.                                                  | `DI-8`       |
+| `AC-HT-009` | Repeating synchronization does not create another record for an unchanged source record.                                                            | `DI-9`       |
+| `AC-HT-010` | A later synchronization reflects available source additions and changes, and a source record reported as deleted is no longer presented as current. | `DI-10`      |
+| `AC-HT-011` | An interrupted or incomplete synchronization can continue without losing accepted records or duplicating unchanged records.                         | `DI-11`      |
+| `AC-HT-012` | The user can determine whether synchronization completed and whether any records were not synchronized.                                             | `DI-12`      |
+| `AC-HT-013` | Synchronization is limited to the record types and history made available by the person's mobile health permissions.                                | `DI-13`      |
 
 These criteria are derived directly from `UN-HT-002`. No risk-derived acceptance criterion is included.
 
@@ -83,10 +83,10 @@ Primary platform references:
 
 ## Traceability
 
-| User need   | Acceptance criteria     | Design input           |
-| ----------- | ----------------------- | ---------------------- |
-| `UN-HT-001` | `AC-HT-001`–`AC-HT-003` | `DI-1` in `SDD-HT-001` |
-| `UN-HT-002` | `AC-HT-004`–`AC-HT-013` | Not yet allocated      |
+| User need   | Acceptance criteria     | Design inputs                  |
+| ----------- | ----------------------- | ------------------------------ |
+| `UN-HT-001` | `AC-HT-001`–`AC-HT-003` | `DI-1`–`DI-3` in `SDD-HT-001`  |
+| `UN-HT-002` | `AC-HT-004`–`AC-HT-013` | `DI-4`–`DI-13` in `SDD-HT-002` |
 
 ## Risk gate
 
