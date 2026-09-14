@@ -9,6 +9,9 @@ export const MEASUREMENT_EVENT_TYPES = {
   recordingUnconfirmed: 'MEASUREMENT_RECORDING_UNCONFIRMED',
 } as const;
 
+export const measurementRecorded = (payload: Measurement) =>
+  ({ type: MEASUREMENT_EVENT_TYPES.recorded, payload }) as const;
+
 export const MEASUREMENT_FAILURE_REASONS = {
   invalidMeasurement: 'INVALID_MEASUREMENT',
   notPermitted: 'NOT_PERMITTED',
@@ -17,10 +20,8 @@ export const MEASUREMENT_FAILURE_REASONS = {
 } as const;
 
 type MeasurementRejectionReason =
-  (typeof MEASUREMENT_FAILURE_REASONS)['invalidMeasurement'] | (typeof MEASUREMENT_FAILURE_REASONS)['notPermitted'];
-
-export const measurementRecorded = (payload: Measurement) =>
-  ({ type: MEASUREMENT_EVENT_TYPES.recorded, payload }) as const;
+  | (typeof MEASUREMENT_FAILURE_REASONS)['invalidMeasurement']
+  | (typeof MEASUREMENT_FAILURE_REASONS)['notPermitted'];
 
 export const measurementRejected = (reason: MeasurementRejectionReason) =>
   ({ type: MEASUREMENT_EVENT_TYPES.rejected, payload: { reason } }) as const;
@@ -42,4 +43,6 @@ export type MeasurementRejected = ReturnType<typeof measurementRejected>;
 export type MeasurementRecordingFailed = ReturnType<typeof measurementRecordingFailed>;
 export type MeasurementRecordingUnconfirmed = ReturnType<typeof measurementRecordingUnconfirmed>;
 export type RecordMeasurementFailure =
-  MeasurementRejected | MeasurementRecordingFailed | MeasurementRecordingUnconfirmed;
+  | MeasurementRejected
+  | MeasurementRecordingFailed
+  | MeasurementRecordingUnconfirmed;

@@ -17,7 +17,8 @@
     "prettier": "prettier --write \"**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,json}\"",
     "sort-package-json": "sort-package-json package.json \"packages/*/package.json\" \"examples/*/package.json\"",
     "test": "turbo run test --filter=!@medplum/docs",
-    "test:acceptance:health-tracking": "vitest run --config examples/medplum-health-tracking/tests/acceptance/vitest.config.mts tests/acceptance/health-tracking/recordMeasurement.api.test.ts"
+    "test:acceptance:health-tracking": "vitest run --config examples/medplum-health-tracking/tests/acceptance/vitest.config.mts tests/acceptance/health-tracking/recordMeasurement.api.test.ts",
+    "test:acceptance:health-tracking:docker": "cross-env MEDPLUM_DOCKER_ACCEPTANCE=1 vitest run --config examples/medplum-health-tracking/tests/acceptance/vitest.config.mts tests/acceptance/health-tracking/recordMeasurement.docker.api.test.ts"
   },
   "prettier": {
     "plugins": [
@@ -67,7 +68,6 @@
     "tsx": "4.23.13",
     "turbo": "2.10.12",
     "typescript": "6.0.3",
-    "undici": "7.29.1",
     "vite": "8.2.2",
     "vitest": "4.1.11",
     "vitest-websocket-mock": "0.5.0"
