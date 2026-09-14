@@ -1,12 +1,16 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 import * as allure from 'allure-js-commons';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from 'undici';
 import { afterEach, describe, expect, test } from 'vitest';
 import { createHealthTrackingHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
 
 const openServers: Server[] = [];
+const liveDispatcher = getGlobalDispatcher();
+let mockAgent: MockAgent | undefined;
 
 const measurementCases = [
   {
@@ -41,6 +45,9 @@ type MedplumTestBackend = {
 
 afterEach(async () => {
   await Promise.all(openServers.splice(0).map(closeServer));
+  setGlobalDispatcher(liveDispatcher);
+  await mockAgent?.close();
+  mockAgent = undefined;
 });
 
 describe('Health Tracking HTTP API', () => {
@@ -114,9 +121,7 @@ describe('Health Tracking HTTP API', () => {
 
 async function getMedplumTestBackend(): Promise<MedplumTestBackend> {
   if (process.env['HEALTH_TRACKING_MEDPLUM_MODE'] === 'mock') {
-    const server = createMockMedplumServer();
-    const { url } = await listen(server);
-    return { mode: 'mock', baseUrl: url, accessToken: createTestAccessToken() };
+    return createMockMedplumBackend();
   }
 
   return {
@@ -126,35 +131,53 @@ async function getMedplumTestBackend(): Promise<MedplumTestBackend> {
   };
 }
 
-function createMockMedplumServer(): Server {
+function createMockMedplumBackend(): MedplumTestBackend {
+  const baseUrl = 'http://medplum.test/';
   const observations = new Map<string, unknown>();
+  mockAgent = new MockAgent();
+  mockAgent.disableNetConnect();
+  mockAgent.enableNetConnect(/^127\.0\.0\.1:\d+$/);
+  setGlobalDispatcher(mockAgent);
+  const medplum = mockAgent.get(baseUrl);
 
-  return createServer(async (request, response) => {
-    const body = await readBody(request);
-
-    if (request.method === 'GET' && request.url === '/auth/me') {
-      return writeJson(response, 200, {
-        profile: { resourceType: 'RelatedPerson', id: 'parent-1' },
-      });
-    }
-
-    if (request.method === 'POST' && request.url === '/fhir/R4') {
-      const observation = transactionResource(body, 'Observation');
+  medplum
+    .intercept({ method: 'GET', path: '/auth/me' })
+    .reply(200, { profile: { resourceType: 'RelatedPerson', id: 'parent-1' } }, fhirResponse)
+    .persist();
+  medplum
+    .intercept({ method: 'POST', path: '/fhir/R4' })
+    .reply(({ body }) => {
+      const observation = transactionResource(parseRequestBody(body), 'Observation');
       const id = typeof observation?.id === 'string' ? observation.id : undefined;
       if (id) {
         observations.set(id, observation);
       }
-      return writeJson(response, 200, { resourceType: 'Bundle', type: 'transaction-response' });
-    }
+      return {
+        statusCode: 200,
+        data: { resourceType: 'Bundle', type: 'transaction-response' },
+        responseOptions: fhirResponse,
+      };
+    })
+    .persist();
+  medplum
+    .intercept({ method: 'GET', path: /^\/fhir\/R4\/Observation\/[^/?]+$/ })
+    .reply(({ path }) => {
+      const observationId = path.match(/^\/fhir\/R4\/Observation\/([^/?]+)$/)?.[1];
+      const observation = observationId ? observations.get(observationId) : undefined;
+      return observation
+        ? { statusCode: 200, data: observation, responseOptions: fhirResponse }
+        : {
+            statusCode: 404,
+            data: { resourceType: 'OperationOutcome', issue: [] },
+            responseOptions: fhirResponse,
+          };
+    })
+    .persist();
 
-    const observationId = request.url?.match(/^\/fhir\/R4\/Observation\/([^/?]+)$/)?.[1];
-    if (request.method === 'GET' && observationId && observations.has(observationId)) {
-      return writeJson(response, 200, observations.get(observationId));
-    }
-
-    return writeJson(response, 404, { resourceType: 'OperationOutcome', issue: [] });
-  });
+  return { mode: 'mock', baseUrl, accessToken: createTestAccessToken() };
 }
+
+const fhirResponse = { headers: { 'content-type': 'application/fhir+json' } } as const;
 
 async function listen(server: Server): Promise<{ server: Server; url: string }> {
   openServers.push(server);
@@ -170,21 +193,19 @@ async function closeServer(server: Server): Promise<void> {
   if (!server.listening) {
     return;
   }
-  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
-async function readBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+function parseRequestBody(body: unknown): unknown {
+  if (typeof body === 'string') {
+    return JSON.parse(body);
   }
-  const text = Buffer.concat(chunks).toString('utf8');
-  return text ? JSON.parse(text) : undefined;
-}
-
-function writeJson(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { 'content-type': 'application/fhir+json' });
-  response.end(JSON.stringify(body));
+  if (body instanceof Uint8Array) {
+    return JSON.parse(Buffer.from(body).toString('utf8'));
+  }
+  return body;
 }
 
 function createTestAccessToken(): string {

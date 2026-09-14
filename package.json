@@ -67,6 +67,7 @@
     "tsx": "4.23.13",
     "turbo": "2.10.12",
     "typescript": "6.0.3",
+    "undici": "7.29.1",
     "vite": "8.2.2",
     "vitest": "4.1.11",
     "vitest-websocket-mock": "0.5.0"
