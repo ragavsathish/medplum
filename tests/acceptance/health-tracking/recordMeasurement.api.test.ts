@@ -7,7 +7,6 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { createHealthTrackingHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
 
 const openServers: Server[] = [];
-const accessToken = createTestAccessToken();
 
 const measurementCases = [
   {
@@ -20,7 +19,6 @@ const measurementCases = [
       value: 138.2,
       unit: 'cm',
     },
-    unitCode: 'cm',
   },
   {
     name: 'weight',
@@ -32,15 +30,13 @@ const measurementCases = [
       value: 32.4,
       unit: 'kg',
     },
-    unitCode: 'kg',
   },
 ] as const;
 
-type CapturedRequest = {
-  method: string | undefined;
-  url: string | undefined;
-  authorization: string | undefined;
-  body: unknown;
+type MedplumTestBackend = {
+  readonly mode: 'live' | 'mock';
+  readonly baseUrl: string;
+  readonly accessToken: string;
 };
 
 afterEach(async () => {
@@ -51,15 +47,15 @@ describe('Health Tracking HTTP API', () => {
   test.each(measurementCases)('records a $name measurement for the intended member over HTTP', async (testCase) => {
     await allure.story('DI-1');
 
-    const medplumRequests: CapturedRequest[] = [];
-    const medplumServer = await listen(createFakeMedplumServer(medplumRequests));
-    const healthTrackingServer = await listen(
-      createServer(createHealthTrackingHttpApp({ medplumBaseUrl: medplumServer.url }))
-    );
+    const medplum = await getMedplumTestBackend();
+    await allure.parameter('Medplum backend', medplum.mode);
 
+    const healthTrackingServer = await listen(
+      createServer(createHealthTrackingHttpApp({ medplumBaseUrl: medplum.baseUrl }))
+    );
     const apiRequest = {
       method: 'POST',
-      url: `${healthTrackingServer.url}measurements`,
+      url: new URL('measurements', healthTrackingServer.url).toString(),
       headers: {
         authorization: '[REDACTED]',
         'content-type': 'application/json',
@@ -70,20 +66,27 @@ describe('Health Tracking HTTP API', () => {
     const response = await fetch(apiRequest.url, {
       method: apiRequest.method,
       headers: {
-        authorization: `Bearer ${accessToken}`,
+        authorization: `Bearer ${medplum.accessToken}`,
         'content-type': apiRequest.headers['content-type'],
       },
       body: JSON.stringify(apiRequest.body),
     });
     const responseBody: unknown = await response.json();
 
+    const observationResponse = await fetch(
+      new URL(`fhir/R4/Observation/${testCase.measurement.id}`, medplum.baseUrl),
+      { headers: { authorization: `Bearer ${medplum.accessToken}` } }
+    );
+    const observationBody: unknown = await observationResponse.json();
+
     await allure.attachment(
       'HTTP API evidence',
       JSON.stringify(
         {
+          medplumBackend: medplum.mode,
           request: apiRequest,
           response: { status: response.status, body: responseBody },
-          medplumRequests: medplumRequests.map(redactAuthorization),
+          persistedObservation: { status: observationResponse.status, body: observationBody },
         },
         null,
         2
@@ -93,45 +96,41 @@ describe('Health Tracking HTTP API', () => {
 
     expect(response.status).toBe(201);
     expect(responseBody).toEqual({ type: 'MEASUREMENT_RECORDED', payload: testCase.measurement });
-    expect(medplumRequests.length).toBe(2);
-    expect(medplumRequests[1]?.authorization === `Bearer ${accessToken}`).toBe(true);
-    const transaction = recordValue(medplumRequests[1]?.body);
-    expect({
-      method: medplumRequests[1]?.method,
-      url: medplumRequests[1]?.url,
-      resourceType: transaction?.resourceType,
-      type: transaction?.type,
-      observation: transactionResource(transaction, 'Observation'),
-    }).toMatchObject({
-      method: 'POST',
-      url: '/fhir/R4',
-      resourceType: 'Bundle',
-      type: 'transaction',
-      observation: {
-        resourceType: 'Observation',
-        id: testCase.measurement.id,
-        subject: { reference: 'Patient/child-1' },
-        effectiveDateTime: testCase.measurement.observedAt,
-        valueQuantity: {
-          value: testCase.measurement.value,
-          unit: testCase.measurement.unit,
-          system: 'http://unitsofmeasure.org',
-          code: testCase.unitCode,
-        },
+    expect(observationResponse.status).toBe(200);
+    expect(observationBody).toMatchObject({
+      resourceType: 'Observation',
+      id: testCase.measurement.id,
+      subject: { reference: 'Patient/child-1' },
+      effectiveDateTime: testCase.measurement.observedAt,
+      valueQuantity: {
+        value: testCase.measurement.value,
+        unit: testCase.measurement.unit,
+        system: 'http://unitsofmeasure.org',
+        code: testCase.measurement.unit,
       },
     });
   });
 });
 
-function createFakeMedplumServer(requests: CapturedRequest[]): Server {
+async function getMedplumTestBackend(): Promise<MedplumTestBackend> {
+  if (process.env['HEALTH_TRACKING_MEDPLUM_MODE'] === 'mock') {
+    const server = createMockMedplumServer();
+    const { url } = await listen(server);
+    return { mode: 'mock', baseUrl: url, accessToken: createTestAccessToken() };
+  }
+
+  return {
+    mode: 'live',
+    baseUrl: process.env['MEDPLUM_BASE_URL'] ?? 'http://127.0.0.1:8103/',
+    accessToken: requiredEnvironmentVariable('MEDPLUM_ACCESS_TOKEN'),
+  };
+}
+
+function createMockMedplumServer(): Server {
+  const observations = new Map<string, unknown>();
+
   return createServer(async (request, response) => {
     const body = await readBody(request);
-    requests.push({
-      method: request.method,
-      url: request.url,
-      authorization: singleHeader(request.headers.authorization),
-      body,
-    });
 
     if (request.method === 'GET' && request.url === '/auth/me') {
       return writeJson(response, 200, {
@@ -140,10 +139,20 @@ function createFakeMedplumServer(requests: CapturedRequest[]): Server {
     }
 
     if (request.method === 'POST' && request.url === '/fhir/R4') {
+      const observation = transactionResource(body, 'Observation');
+      const id = typeof observation?.id === 'string' ? observation.id : undefined;
+      if (id) {
+        observations.set(id, observation);
+      }
       return writeJson(response, 200, { resourceType: 'Bundle', type: 'transaction-response' });
     }
 
-    return writeJson(response, 404, { error: 'Unexpected fake Medplum request' });
+    const observationId = request.url?.match(/^\/fhir\/R4\/Observation\/([^/?]+)$/)?.[1];
+    if (request.method === 'GET' && observationId && observations.has(observationId)) {
+      return writeJson(response, 200, observations.get(observationId));
+    }
+
+    return writeJson(response, 404, { resourceType: 'OperationOutcome', issue: [] });
   });
 }
 
@@ -178,14 +187,6 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
   response.end(JSON.stringify(body));
 }
 
-function singleHeader(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function redactAuthorization(request: CapturedRequest): CapturedRequest {
-  return { ...request, authorization: request.authorization ? '[REDACTED]' : undefined };
-}
-
 function createTestAccessToken(): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(
@@ -194,28 +195,29 @@ function createTestAccessToken(): string {
   return `${header}.${payload}.test-signature`;
 }
 
-function recordValue(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
+function requiredEnvironmentVariable(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required when testing against the Docker Compose Medplum server`);
+  }
+  return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function transactionResource(
-  transaction: Record<string, unknown> | undefined,
-  resourceType: string
-): Record<string, unknown> | undefined {
-  if (!Array.isArray(transaction?.entry)) {
+function transactionResource(value: unknown, resourceType: string): Record<string, unknown> | undefined {
+  if (!isRecord(value) || !Array.isArray(value.entry)) {
     return undefined;
   }
 
-  for (const value of transaction.entry) {
-    const resource = recordValue(recordValue(value)?.resource);
+  for (const entry of value.entry) {
+    const resource = isRecord(entry) && isRecord(entry.resource) ? entry.resource : undefined;
     if (resource?.resourceType === resourceType) {
       return resource;
     }
   }
 
   return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
