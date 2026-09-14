@@ -1,6 +1,16 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
-import { isGone, isNotFound, MedplumClient, normalizeOperationOutcome } from '@medplum/core';
+import {
+  ClientStorage,
+  getStatus,
+  isGone,
+  isNotFound,
+  MedplumClient,
+  MemoryStorage,
+  normalizeOperationOutcome,
+  resolveId,
+} from '@medplum/core';
+import type { Project } from '@medplum/fhirtypes';
 import * as allure from 'allure-js-commons';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
@@ -43,9 +53,15 @@ type MedplumTestBackend = {
   readonly client: MedplumClient;
 };
 
-type FhirResourceFixture = {
+type AccessFixture = {
   readonly medplum: MedplumTestBackend;
-  readonly resourceType: 'Observation' | 'Patient';
+  readonly patientId: string;
+  readonly otherPatientId: string;
+};
+
+type FhirResourceFixture = {
+  readonly client: MedplumClient;
+  readonly resourceType: 'Observation' | 'Patient' | 'ProjectMembership' | 'RelatedPerson' | 'User';
   readonly id: string;
 };
 
@@ -61,15 +77,53 @@ describe('Health Tracking HTTP API', () => {
   test.each(measurementCases)('records a $name measurement for the intended member over HTTP', async (testCase) => {
     await allure.story('DI-1');
 
-    const medplum = await getMedplumTestBackend();
+    const { medplum, patientId, otherPatientId } = await getAccessFixture();
     await allure.parameter('Medplum backend', medplum.mode);
-    const patientId = await seedTestPatient(medplum);
+    const actor = await medplum.client.getProfileAsync();
+    if (!actor) {
+      throw new Error('The acceptance user profile was not returned by Medplum');
+    }
+    const membership = medplum.client.getProjectMembership();
+    const accessPolicy = medplum.client.getAccessPolicy();
+    const [assignedPatientStatus, unassignedPatientStatus] = await Promise.all([
+      readStatus(medplum.client, 'Patient', patientId),
+      readStatus(medplum.client, 'Patient', otherPatientId),
+    ]);
+    await allure.attachment(
+      'Access policy evidence',
+      JSON.stringify(
+        {
+          actor: `${actor.resourceType}/${actor.id}`,
+          actorIsAdmin: membership?.admin ?? false,
+          resolvedAccessPolicy: accessPolicy,
+          assignedPatient: `Patient/${patientId}`,
+          assignedPatientReadStatus: assignedPatientStatus,
+          unassignedPatientReadStatus: unassignedPatientStatus,
+        },
+        null,
+        2
+      ),
+      { contentType: 'application/json' }
+    );
+
+    expect(actor.resourceType).toBe('RelatedPerson');
+    expect(membership?.admin).not.toBe(true);
+    expect(accessPolicy?.basedOn).toHaveLength(1);
+    expect(accessPolicy?.resource).toContainEqual(
+      expect.objectContaining({
+        resourceType: 'Observation',
+        criteria: `Observation?_compartment=Patient/${patientId}`,
+      })
+    );
+    expect(assignedPatientStatus).toBe(200);
+    expect(unassignedPatientStatus).toBe(404);
+
     const measurement = {
       id: `${testCase.name}-${randomUUID()}`,
       patientId,
       ...testCase.measurement,
     } as const;
-    fhirResourcesToDelete.push({ medplum, resourceType: 'Observation', id: measurement.id });
+    fhirResourcesToDelete.push({ client: medplum.client, resourceType: 'Observation', id: measurement.id });
 
     const healthTrackingServer = await listen(
       createServer(createHealthTrackingHttpApp({ medplumBaseUrl: medplum.baseUrl }))
@@ -129,31 +183,113 @@ describe('Health Tracking HTTP API', () => {
   });
 });
 
-async function getMedplumTestBackend(): Promise<MedplumTestBackend> {
+async function getAccessFixture(): Promise<AccessFixture> {
   if (process.env['HEALTH_TRACKING_MEDPLUM_MODE'] === 'mock') {
-    return createMockMedplumBackend();
+    return createMockAccessFixture();
   }
 
-  return createMedplumTestBackend({
-    mode: 'live',
-    baseUrl: process.env['MEDPLUM_BASE_URL'] ?? 'http://127.0.0.1:8103/',
-    accessToken: requiredEnvironmentVariable('MEDPLUM_ACCESS_TOKEN'),
-  });
+  return createLiveAccessFixture();
 }
 
-function createMockMedplumBackend(): MedplumTestBackend {
+async function createLiveAccessFixture(): Promise<AccessFixture> {
+  const baseUrl = process.env['MEDPLUM_BASE_URL'] ?? 'http://127.0.0.1:8103/';
+  const admin = new MedplumClient({
+    baseUrl,
+    accessToken: requiredEnvironmentVariable('MEDPLUM_ADMIN_ACCESS_TOKEN'),
+  });
+  const adminProfile = await admin.getProfileAsync();
+  if (!adminProfile || !admin.isSuperAdmin()) {
+    throw new Error('MEDPLUM_ADMIN_ACCESS_TOKEN must identify the seeded human super administrator');
+  }
+
+  const project = await getOrCreateAcceptanceProject(admin);
+  const patientId = await seedTestPatient(admin, project.id, 'Assigned');
+  const otherPatientId = await seedTestPatient(admin, project.id, 'Unassigned');
+  const email = `caregiver-${randomUUID()}@example.com`;
+  const password = `Acceptance-${randomUUID()}!`;
+  const membership = await admin.invite(project.id, {
+    resourceType: 'RelatedPerson',
+    firstName: 'Acceptance',
+    lastName: 'Caregiver',
+    email,
+    password,
+    patient: { reference: `Patient/${patientId}` },
+    scope: 'project',
+    sendEmail: false,
+  });
+  if (membership.resourceType !== 'ProjectMembership' || !membership.id || !membership.user || !membership.profile) {
+    throw new Error('Failed to provision the RelatedPerson acceptance-test membership');
+  }
+  const userId = resolveId(membership.user);
+  const profileId = resolveId(membership.profile);
+  if (!userId || !profileId) {
+    throw new Error('The RelatedPerson acceptance-test membership has invalid references');
+  }
+  fhirResourcesToDelete.push(
+    { client: admin, resourceType: 'User', id: userId },
+    { client: admin, resourceType: 'RelatedPerson', id: profileId },
+    { client: admin, resourceType: 'ProjectMembership', id: membership.id }
+  );
+
+  const actorClient = await loginHumanUser(baseUrl, email, password, project.id);
+  const accessToken = actorClient.getAccessToken();
+  if (!accessToken) {
+    throw new Error('The RelatedPerson acceptance-test login returned no access token');
+  }
+  return {
+    medplum: createMedplumTestBackend({
+      mode: 'live',
+      baseUrl,
+      accessToken,
+      client: actorClient,
+    }),
+    patientId,
+    otherPatientId,
+  };
+}
+
+async function createMockAccessFixture(): Promise<AccessFixture> {
   const baseUrl = 'http://medplum.test/';
   const patients = new Map<string, unknown>();
   const observations = new Map<string, unknown>();
+  let authorizedPatientId: string | undefined;
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
   mockAgent.enableNetConnect(/^127\.0\.0\.1:\d+$/);
   setGlobalDispatcher(mockAgent);
-  const medplum = mockAgent.get(baseUrl);
+  const medplum = mockAgent.get(new URL(baseUrl).origin);
 
   medplum
     .intercept({ method: 'GET', path: '/auth/me' })
-    .reply(200, { profile: { resourceType: 'RelatedPerson', id: 'parent-1' } }, fhirResponse)
+    .reply(() => ({
+      statusCode: 200,
+      data: {
+        project: { resourceType: 'Project', id: 'health-tracking-project', name: 'Health Tracking Acceptance' },
+        membership: {
+          resourceType: 'ProjectMembership',
+          id: 'caregiver-membership',
+          profile: { reference: 'RelatedPerson/parent-1' },
+        },
+        profile: {
+          resourceType: 'RelatedPerson',
+          id: 'parent-1',
+          patient: { reference: `Patient/${authorizedPatientId}` },
+        },
+        config: { resourceType: 'UserConfiguration' },
+        accessPolicy: {
+          resourceType: 'AccessPolicy',
+          basedOn: [{ reference: 'AccessPolicy/default-related-person' }],
+          resource: [
+            { resourceType: 'Patient', criteria: `Patient?_id=${authorizedPatientId}` },
+            {
+              resourceType: 'Observation',
+              criteria: `Observation?_compartment=Patient/${authorizedPatientId}`,
+            },
+          ],
+        },
+      },
+      responseOptions: fhirResponse,
+    }))
     .persist();
   medplum
     .intercept({ method: 'POST', path: '/fhir/R4/Patient' })
@@ -161,7 +297,22 @@ function createMockMedplumBackend(): MedplumTestBackend {
       const id = randomUUID();
       const patient = { ...asRecord(parseRequestBody(body)), id };
       patients.set(id, patient);
+      authorizedPatientId ??= id;
       return { statusCode: 201, data: patient, responseOptions: fhirResponse };
+    })
+    .times(2);
+  medplum
+    .intercept({ method: 'GET', path: /^\/fhir\/R4\/Patient\/[^/?]+$/ })
+    .reply(({ path }) => {
+      const patientId = path.match(/^\/fhir\/R4\/Patient\/([^/?]+)$/)?.[1];
+      const patient = patientId && patientId === authorizedPatientId ? patients.get(patientId) : undefined;
+      return patient
+        ? { statusCode: 200, data: patient, responseOptions: fhirResponse }
+        : {
+            statusCode: 404,
+            data: { resourceType: 'OperationOutcome', id: 'not-found', issue: [] },
+            responseOptions: fhirResponse,
+          };
     })
     .persist();
   medplum
@@ -186,7 +337,7 @@ function createMockMedplumBackend(): MedplumTestBackend {
       const deleted = resourceType === 'Observation' ? observations.delete(id) : patients.delete(id);
       return {
         statusCode: deleted ? 204 : 404,
-        data: deleted ? undefined : { resourceType: 'OperationOutcome', issue: [] },
+        data: deleted ? undefined : { resourceType: 'OperationOutcome', id: 'not-found', issue: [] },
         responseOptions: fhirResponse,
       };
     })
@@ -200,32 +351,66 @@ function createMockMedplumBackend(): MedplumTestBackend {
         ? { statusCode: 200, data: observation, responseOptions: fhirResponse }
         : {
             statusCode: 404,
-            data: { resourceType: 'OperationOutcome', issue: [] },
+            data: { resourceType: 'OperationOutcome', id: 'not-found', issue: [] },
             responseOptions: fhirResponse,
           };
     })
     .persist();
 
-  return createMedplumTestBackend({ mode: 'mock', baseUrl, accessToken: createTestAccessToken() });
+  const admin = new MedplumClient({ baseUrl, accessToken: createTestAccessToken('admin-login') });
+  const patientId = await seedTestPatient(admin, undefined, 'Assigned');
+  const otherPatientId = await seedTestPatient(admin, undefined, 'Unassigned');
+  return {
+    medplum: createMedplumTestBackend({
+      mode: 'mock',
+      baseUrl,
+      accessToken: createTestAccessToken('caregiver-login'),
+    }),
+    patientId,
+    otherPatientId,
+  };
 }
 
 const fhirResponse = { headers: { 'content-type': 'application/fhir+json' } } as const;
 
-async function seedTestPatient(medplum: MedplumTestBackend): Promise<string> {
-  const patient = await medplum.client.createResource({
+async function getOrCreateAcceptanceProject(admin: MedplumClient): Promise<Project & { id: string }> {
+  const name = 'Health Tracking Acceptance';
+  const existing = await admin.searchOne('Project', { name });
+  if (existing) {
+    if (
+      existing.superAdmin ||
+      !existing.defaultAccessPolicies?.some((entry) => entry.profileType === 'RelatedPerson')
+    ) {
+      throw new Error('The Health Tracking Acceptance project is not initialized with RelatedPerson access');
+    }
+    return existing;
+  }
+  return admin.post<Project & { id: string }>('fhir/R4/Project/$init', {
+    resourceType: 'Parameters',
+    parameter: [{ name: 'name', valueString: name }],
+  });
+}
+
+async function seedTestPatient(
+  client: MedplumClient,
+  projectId: string | undefined,
+  given: 'Assigned' | 'Unassigned'
+): Promise<string> {
+  const patient = await client.createResource({
     resourceType: 'Patient',
+    meta: projectId ? { project: projectId } : undefined,
     active: true,
     identifier: [{ system: 'urn:medplum:health-tracking:acceptance', value: randomUUID() }],
-    name: [{ use: 'official', family: 'Acceptance', given: ['Health Tracking'] }],
+    name: [{ use: 'official', family: 'Acceptance', given: [given] }],
   });
-  fhirResourcesToDelete.push({ medplum, resourceType: 'Patient', id: patient.id });
+  fhirResourcesToDelete.push({ client, resourceType: 'Patient', id: patient.id });
   return patient.id;
 }
 
 async function cleanupFhirFixtures(): Promise<void> {
   for (const fixture of fhirResourcesToDelete.splice(0).reverse()) {
     try {
-      await fixture.medplum.client.deleteResource(fixture.resourceType, fixture.id);
+      await fixture.client.deleteResource(fixture.resourceType, fixture.id);
     } catch (error) {
       const outcome = normalizeOperationOutcome(error);
       if (!isNotFound(outcome) && !isGone(outcome)) {
@@ -235,8 +420,56 @@ async function cleanupFhirFixtures(): Promise<void> {
   }
 }
 
-function createMedplumTestBackend(backend: Omit<MedplumTestBackend, 'client'>): MedplumTestBackend {
-  return { ...backend, client: new MedplumClient({ baseUrl: backend.baseUrl, accessToken: backend.accessToken }) };
+function createMedplumTestBackend(
+  backend: Omit<MedplumTestBackend, 'client'> & Partial<Pick<MedplumTestBackend, 'client'>>
+): MedplumTestBackend {
+  return {
+    ...backend,
+    client: backend.client ?? new MedplumClient({ baseUrl: backend.baseUrl, accessToken: backend.accessToken }),
+  };
+}
+
+async function loginHumanUser(
+  baseUrl: string,
+  email: string,
+  password: string,
+  projectId: string
+): Promise<MedplumClient> {
+  const storage = new ClientStorage(new MemoryStorage());
+  const codeVerifier = randomUUID();
+  storage.setString('codeVerifier', codeVerifier);
+  const client = new MedplumClient({ baseUrl, storage });
+  let response = await client.startLogin({
+    email,
+    password,
+    projectId,
+    scope: 'openid profile',
+    codeChallengeMethod: 'plain',
+    codeChallenge: codeVerifier,
+    redirectUri: 'http://localhost',
+  });
+  if (!response.code) {
+    const membership = response.memberships?.find((item) => item.project?.reference === `Project/${projectId}`);
+    if (!membership?.id) {
+      throw new Error('The acceptance user has no membership in the Health Tracking Acceptance project');
+    }
+    response = await client.post('auth/profile', { login: response.login, profile: membership.id });
+  }
+  if (!response.code) {
+    throw new Error('The acceptance user login returned no authorization code');
+  }
+  await client.processCode(response.code, { redirectUri: 'http://localhost' });
+  await client.getProfileAsync();
+  return client;
+}
+
+async function readStatus(client: MedplumClient, resourceType: 'Patient', id: string): Promise<number> {
+  try {
+    await client.readResource(resourceType, id, { cache: 'no-cache' });
+    return 200;
+  } catch (error) {
+    return getStatus(normalizeOperationOutcome(error));
+  }
 }
 
 async function listen(server: Server): Promise<{ server: Server; url: string }> {
@@ -268,11 +501,11 @@ function parseRequestBody(body: unknown): unknown {
   return body;
 }
 
-function createTestAccessToken(): string {
+function createTestAccessToken(loginId: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
-  const payload = Buffer.from(
-    JSON.stringify({ login_id: 'acceptance-login', exp: Math.floor(Date.now() / 1000) + 300 })
-  ).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ login_id: loginId, exp: Math.floor(Date.now() / 1000) + 300 })).toString(
+    'base64url'
+  );
   return `${header}.${payload}.test-signature`;
 }
 
