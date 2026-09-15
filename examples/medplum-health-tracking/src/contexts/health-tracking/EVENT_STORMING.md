@@ -1,225 +1,208 @@
-# Health Tracking Event Storming
+# Accounts and Health Tracking Event Storming
 
-Start here for the evolving workflow. See [CONTEXT.md](./CONTEXT.md) for the agreed domain language.
+This workshop records how the model evolved, not just its final diagram. The agreed Health Tracking language is in
+[CONTEXT.md](./CONTEXT.md); Accounts language is still being explored.
 
-## Scope
+## How we got here
 
-Storm two event streams independently before connecting them:
+1. We started with successful events for a person recording height or weight and for synchronizing mobile step counts
+   or sleep sessions. We stormed those streams independently before connecting them.
+2. We added the commands that could produce each event: record, correct, and synchronize.
+3. We added known refusals, technical failures, and uncertain outcomes. These are failed-command outcomes; whether
+   each needs a durable domain event is not yet decided.
+4. We expanded the board to account onboarding, family access, and limited agent digitization access because those
+   outcomes affect who may act for a member.
+5. We recognized that a mobile step count or sleep session **is a measurement**. Source identity and synchronization
+   do not make it a separate health fact. Manual and mobile paths therefore share `Measurement Recorded` and
+   `Measurement Corrected`.
+   We then separated **who acts** (a person or limited agent) from **how a measurement arrives** (direct submission or
+   source reconciliation).
+6. We grouped the events by ownership: **Accounts** owns onboarding and grants; **Health Tracking** owns measurements.
+   Keycloak authentication and the mobile health source remain external facts. Grant events show a prerequisite, not
+   automatic authorization at command execution.
 
-1. Record or correct one height or weight measurement for the active member.
-2. Synchronize permitted step-count records and sleep sessions for the active member.
+## Phase 1 — Successful events
 
-## Workshop phases
-
-1. Successful domain events
-2. Commands that cause those events
-3. Failure events
-
-Only the active phase is placed on the storming board. Later-phase details stay in the parking lot.
-
-## Phase 1 — Successful events (agreed)
-
-```mermaid
-flowchart LR
-    subgraph Manual["Manual measurement"]
-        Recorded["Measurement Recorded"]
-        Corrected["Measurement Corrected"]
-
-        Recorded -. "may later be corrected" .-> Corrected
-    end
-
-    subgraph Mobile["Mobile health synchronization"]
-        Synchronized["Mobile Health Record Synchronized"]
-        Retracted["Source Record Retracted"]
-        Completed["Mobile Health Synchronization Completed"]
-
-        Synchronized --> Completed
-        Retracted --> Completed
-    end
-```
-
-- **Measurement Recorded:** A height or weight measurement was committed to the authoritative health record.
-- **Measurement Corrected:** A recorded measurement was corrected and its previous value remains available in history.
-- **Mobile Health Record Synchronized:** The current state of a step-count record or sleep session was committed to the
-  active member's authoritative health record.
-- **Source Record Retracted:** A source-reported deletion was reflected so the synchronized record is no longer current
-  and its history remains available.
-- **Mobile Health Synchronization Completed:** Every available source change in the synchronization attempt has a known
-  outcome. Completion can include records that were not synchronized.
-
-## Phase 2 — Commands (agreed)
+We first identified these facts without assuming commands or failures:
 
 ```mermaid
 flowchart LR
-    subgraph Manual["Manual measurement"]
-        Record["Record Measurement"] --> Recorded["Measurement Recorded"]
-        Recorded -. "may later be corrected" .-> Correct["Correct Measurement"]
-        Correct --> Corrected["Measurement Corrected"]
-    end
-
-    subgraph Mobile["Mobile health synchronization"]
-        Sync["Synchronize Mobile Health Changes"] --> Synchronized["Mobile Health Record Synchronized"]
-        Sync --> Retracted["Source Record Retracted"]
-        Synchronized --> Completed["Mobile Health Synchronization Completed"]
-        Retracted --> Completed
-    end
+    Recorded["Measurement Recorded"] -. "may later change" .-> Corrected["Measurement Corrected"]
+    Retracted["Source Record Retracted"]
+    Completed["Synchronization Completed"]
 ```
 
-- **Record Measurement:** Request that a height or weight measurement be committed for the active member.
-- **Correct Measurement:** Request a correction to an existing recorded measurement without losing its history.
-- **Synchronize Mobile Health Changes:** Request reconciliation of permitted step-count or sleep source changes with
-  the active member's authoritative health record.
+- **Measurement Recorded:** One measurement was committed for the intended member. Height, weight, steps, and sleep
+  use the same event name.
+- **Measurement Corrected:** A previously recorded measurement changed; its earlier value remains in history.
+- **Source Record Retracted:** A mobile source reported a deletion, and that measurement is no longer current without
+  erasing its history.
+- **Synchronization Completed:** Every available change in the attempt reached a known outcome. Some records may have
+  been refused or failed.
+
+The first two events describe the measurement regardless of source. The last two describe source reconciliation.
+There is no second `Mobile Health Record Synchronized` measurement event.
+
+## Phase 2 — Commands
+
+Only after naming the successful facts did we ask what requests produce them:
+
+```mermaid
+flowchart LR
+    Record["Record Measurement"] -->|new measurement committed| Recorded["Measurement Recorded"]
+    Correct["Correct Measurement"] -->|change committed| Corrected["Measurement Corrected"]
+
+    Sync["Synchronize Mobile Health Changes"] -->|new measurement committed| Recorded
+    Sync -->|changed measurement committed| Corrected
+    Sync -->|source deletion committed| Retracted["Source Record Retracted"]
+    Sync -->|attempt concluded| Completed["Synchronization Completed"]
+```
+
+`Record Measurement` currently covers directly submitted height or weight; `Synchronize Mobile Health Changes`
+currently covers permitted step-count and sleep source changes. A permitted person or agent may use either command
+within their own authority. The current digitization grant does not authorize `Correct Measurement`. Different
+commands converge on the same measurement events.
 
 ## Phase 3 — Failure outcomes
 
-Notation: blue is a command, orange is a successful domain event, red is a failed-command outcome, and grey lists stable
-reason codes. A failed-command outcome becomes a durable domain event only when another business process needs to react to
-it.
+We then considered what happens when a command does not confirm a successful commit:
 
 ```mermaid
 flowchart LR
-    Record["Record Measurement"] -->|success| Recorded["Measurement Recorded"]
-    Record -->|known refusal| RecordRejected["Measurement Rejected"]
-    Record -->|known technical failure| RecordFailed["Measurement Recording Failed"]
-    Record -->|commit uncertain| RecordUnknown["Measurement Recording Unconfirmed"]
+    Record["Record Measurement"] -->|known refusal| Rejected["Measurement Rejected"]
+    Record -->|known technical failure| Failed["Measurement Recording Failed"]
+    Record -->|commit uncertain| Unknown["Measurement Recording Unconfirmed"]
 
-    RecordReasons["INVALID_MEASUREMENT<br/>NOT_PERMITTED"] -.-> RecordRejected
-    Unavailable["RECORD_UNAVAILABLE"] -.-> RecordFailed
-    Unknown["OUTCOME_UNKNOWN"] -.-> RecordUnknown
-
-    Correct["Correct Measurement"] -->|success| Corrected["Measurement Corrected"]
-    Correct -->|known refusal| CorrectionRejected["Measurement Correction Rejected"]
+    Correct["Correct Measurement"] -->|known refusal| CorrectionRejected["Measurement Correction Rejected"]
     Correct -->|known technical failure| CorrectionFailed["Measurement Correction Failed"]
     Correct -->|commit uncertain| CorrectionUnknown["Measurement Correction Unconfirmed"]
 
-    CorrectionReasons["INVALID_CORRECTION<br/>NOT_PERMITTED<br/>MEASUREMENT_NOT_FOUND<br/>VERSION_CONFLICT"] -.-> CorrectionRejected
-    Unavailable -.-> CorrectionFailed
-    Unknown -.-> CorrectionUnknown
-
-    Sync["Synchronize Mobile Health Changes"] -->|record accepted| Synchronized["Mobile Health Record Synchronized"]
-    Sync -->|deletion accepted| Retracted["Source Record Retracted"]
-    Sync -->|attempt concluded| Completed["Mobile Health Synchronization Completed"]
-    Sync -->|known refusal| SyncRejected["Mobile Health Record Rejected"]
-    Sync -->|known technical failure| SyncFailed["Mobile Health Synchronization Failed"]
-    Sync -->|commit uncertain| SyncUnknown["Mobile Health Synchronization Unconfirmed"]
-
-    SyncReasons["INVALID_SOURCE_RECORD<br/>NOT_PERMITTED"] -.-> SyncRejected
-    SourceUnavailable["SOURCE_UNAVAILABLE<br/>RECORD_UNAVAILABLE"] -.-> SyncFailed
-    Unknown -.-> SyncUnknown
-
-    classDef command fill:#b9dcff,stroke:#2563eb,color:#111827
-    classDef event fill:#ffbd59,stroke:#c77700,color:#111827
-    classDef failure fill:#fecaca,stroke:#dc2626,color:#111827
-    classDef reason fill:#e5e7eb,stroke:#6b7280,color:#111827
-    class Record,Correct,Sync command
-    class Recorded,Corrected,Synchronized,Retracted,Completed event
-    class RecordRejected,RecordFailed,RecordUnknown,CorrectionRejected,CorrectionFailed,CorrectionUnknown,SyncRejected,SyncFailed,SyncUnknown failure
-    class RecordReasons,CorrectionReasons,SyncReasons,Unavailable,SourceUnavailable,Unknown reason
+    Sync["Synchronize Mobile Health Changes"] -->|source record refused| SyncRejected["Source Record Rejected"]
+    Sync -->|known technical failure| SyncFailed["Synchronization Failed"]
+    Sync -->|commit uncertain| SyncUnknown["Synchronization Unconfirmed"]
+    Sync -->|all available changes have known outcomes| Completed["Synchronization Completed"]
 ```
 
-- **Rejected:** A known rule prevented the commit. The requester must change the request, actor, or target before retrying.
-- **Failed:** A known technical problem prevented the commit. A safe retry may succeed.
-- **Unconfirmed:** The response was lost or interrupted after submission, so commit success is unknown. Verify the
-  authoritative record before retrying.
-- **Completed with exceptions:** The attempt reached a known outcome for every available change, but one or more records
-  were rejected or failed. Completion does not mean that every record was synchronized.
+| Outcome | Meaning | Examples of reason codes |
+| --- | --- | --- |
+| Rejected | A known rule prevented the commit; the request, actor, or target must change. | `INVALID_MEASUREMENT`, `INVALID_CORRECTION`, `INVALID_SOURCE_RECORD`, `NOT_PERMITTED`, `MEASUREMENT_NOT_FOUND`, `VERSION_CONFLICT` |
+| Failed | A known technical problem prevented the commit; a safe retry may succeed. | `SOURCE_UNAVAILABLE`, `RECORD_UNAVAILABLE` |
+| Unconfirmed | Submission happened, but the authoritative commit outcome is unknown; verify before retrying. | `OUTCOME_UNKNOWN` |
 
-## Context boundary
+`Synchronization Completed` may include refused or failed individual records, but not a record whose outcome remains
+unknown. Authentication failure occurs before these domain commands. Failed-command outcomes become durable domain
+events only if another business process needs to react to them.
 
-The current storm demonstrates one bounded context: **Health Tracking**. Identity and access provides an external
-capability, while the FHIR repository is a platform boundary used for persistence.
+## Phase 4 — Related Accounts events
+
+The measurement commands raised a prior question: whose member record may the person or agent act on? We expanded the
+happy-path board without changing the measurement event names:
 
 ```mermaid
 flowchart LR
-    Identity["Identity and access<br/>external capability"]
+    Onboard["Onboard Account"] --> Account["Account Onboarded"]
+    Family["Grant Charlie Access to Alice"] --> FamilyGranted["Charlie Access Granted to Alice"]
+    AgentGrant["Grant Digitization Access"] --> AgentGranted["Agent Access Granted<br/>Alice + Charlie"]
+```
 
-    subgraph HT["Health Tracking — bounded context"]
-        Record["Record Measurement"]
-        Recorded["Measurement Recorded"]
-        RecordRejected["Measurement Rejected"]
-        RecordFailed["Measurement Recording Failed / Unconfirmed"]
+`Account Onboarded` establishes self-member authority. Charlie's grant is authority to act **for Alice**, not to
+select Charlie as the active member. The agent grant is narrower than a person's authority: it covers digitization
+commands for Alice and Charlie only, and its current scope is checked when either command executes. Accounts failure
+outcomes and grant revocation have not yet been
+stormed, so they are not invented on this board.
 
-        Correct["Correct Measurement"]
-        Corrected["Measurement Corrected"]
-        CorrectionRejected["Measurement Correction Rejected"]
-        CorrectionFailed["Measurement Correction Failed / Unconfirmed"]
+## Phase 5 — Bounded contexts and connections
 
-        Sync["Synchronize Mobile Health Changes"]
-        Synchronized["Mobile Health Record Synchronized / Source Record Retracted"]
-        SyncFailed["Mobile Health Record Rejected / Synchronization Failed"]
-        SyncUnknown["Mobile Health Synchronization Unconfirmed"]
-        SyncCompleted["Mobile Health Synchronization Completed"]
+We kept the final view simple: two bounded contexts, shared measurement events, and external inputs. Dashed links
+represent authority prerequisites, **not** automatic authorization or an assumed event bus.
+
+```mermaid
+flowchart LR
+    subgraph Accounts["Accounts context"]
+        Onboard["Onboard Account"] --> Account["Account Onboarded"]
+        Family["Grant Charlie Access to Alice"] --> FamilyGranted["Charlie Access Granted to Alice"]
+        AgentGrant["Grant Digitization Access"] --> AgentGranted["Agent Access Granted<br/>Alice + Charlie"]
     end
 
-    MobileSource["Mobile health source<br/>external capability"]
-    Repository["FHIR repository<br/>platform boundary"]
+    Auth["Keycloak authentication<br/>external fact"] -.-> Onboard
 
-    Identity -. "recorder identity" .-> Record
-    Identity -. "recorder identity" .-> Correct
-    Identity -. "recorder identity" .-> Sync
-    MobileSource -->|permitted step and sleep changes| Sync
+    subgraph Tracking["Health Tracking context"]
+        Record["Record Measurement"]
+        Correct["Correct Measurement"]
+        Sync["Synchronize Mobile Health Changes"]
 
-    Record -->|create Observation| Repository
-    Repository -->|commit confirmed| Recorded
-    Repository -->|refused| RecordRejected
-    Repository -->|failed or uncertain| RecordFailed
+        Recorded["Measurement Recorded"]
+        Corrected["Measurement Corrected"]
+        Retracted["Source Record Retracted"]
+        Completed["Synchronization Completed"]
 
-    Correct -->|update Observation| Repository
-    Repository -->|update confirmed| Corrected
-    Repository -->|not found or conflict| CorrectionRejected
-    Repository -->|update failed or uncertain| CorrectionFailed
+        Rejected["Measurement Rejected"]
+        Other["Recording Failed / Unconfirmed"]
+        SyncRejected["Source Record Rejected"]
 
-    Sync -->|reconcile Observation and Provenance| Repository
-    Repository -->|commit confirmed| Synchronized
-    Repository -->|refused or failed| SyncFailed
-    Repository -->|commit uncertain| SyncUnknown
-    Synchronized --> SyncCompleted
-    SyncFailed --> SyncCompleted
+        Record -->|committed| Recorded
+        Record -->|refused| Rejected
+        Record -->|failed or uncertain| Other
+
+        Correct -->|committed| Corrected
+        Sync -->|new measurement committed| Recorded
+        Sync -->|changed measurement committed| Corrected
+        Sync -->|source deletion committed| Retracted
+        Sync -->|record refused| SyncRejected
+        Sync -->|attempt concluded| Completed
+    end
+
+    Account -. "self-member authority" .-> Record
+    FamilyGranted -. "Charlie may act for Alice" .-> Record
+    FamilyGranted -. "Charlie may act for Alice" .-> Sync
+    AgentGranted -. "limited authority; checked at execution" .-> Record
+    AgentGranted -. "limited authority; checked at execution" .-> Sync
+
+    Source["Permitted mobile health source<br/>steps + sleep"] --> Sync
 
     classDef command fill:#b9dcff,stroke:#2563eb,color:#111827
     classDef event fill:#ffbd59,stroke:#c77700,color:#111827
     classDef failure fill:#fecaca,stroke:#dc2626,color:#111827
     classDef external fill:#f5d0fe,stroke:#a21caf,color:#111827
-    class Record,Correct,Sync command
-    class Recorded,Corrected,Synchronized,SyncCompleted event
-    class RecordRejected,RecordFailed,CorrectionRejected,CorrectionFailed,SyncFailed,SyncUnknown failure
-    class Identity,MobileSource,Repository external
+    class Onboard,Family,AgentGrant,Record,Correct,Sync command
+    class Account,FamilyGranted,AgentGranted,Recorded,Corrected,Retracted,Completed event
+    class Rejected,Other,SyncRejected failure
+    class Auth,Source external
 ```
 
-| Participant          | Classification      | Responsibility                                                                      |
-| -------------------- | ------------------- | ----------------------------------------------------------------------------------- |
-| Health Tracking      | Bounded context     | Measurement and synchronization commands, rules, events, and caller-facing outcomes |
-| Identity and access  | External capability | Recorder identity and access decisions                                              |
-| Mobile health source | External capability | Permitted step-count and sleep source records and changes                           |
-| FHIR repository      | Platform boundary   | Persistence, FHIR validation, version history, and storage outcomes                 |
+| Boundary | Owns | Does not own |
+| --- | --- | --- |
+| Accounts | Account onboarding, family grants, and limited agent grants | Measurements or mobile source reconciliation |
+| Health Tracking | Recording, correction, retraction, and synchronization outcomes | Authentication or grant lifecycle |
+| Keycloak | Authentication fact | Accounts or Health Tracking domain events |
+| Mobile health source | Step and sleep source changes | The authoritative member record |
+| Medplum | FHIR persistence and resource-level access enforcement | Either bounded context's domain language |
 
-Health Tracking translates external decisions and storage outcomes into its own language. FHIR and HTTP terms do not
-cross into the core domain model.
+At execution, Health Tracking needs the current actor-to-member authority, and Medplum must permit the specific FHIR
+write. A past grant event alone is not sufficient. This board does not choose whether the contexts communicate by a
+direct query, a projection, or another mechanism; that contract belongs in design.
 
 ## Agreed decisions
 
-- A recorder may be the member, a permitted family caregiver, or a practitioner.
-- The active member comes from the recording context; measurement details do not select the member.
-- `Measurement Recorded` occurs only after the measurement is committed to the authoritative health record.
-- Corrections preserve history using FHIR resource versioning; the domain does not maintain a parallel history model.
-- Mobile health synchronization starts with step-count records and sleep sessions.
-- A source record is synchronized only after its current state is committed to the authoritative health record.
-- Synchronization completion can include records that were not synchronized, provided their outcomes are known.
-- Source-reported deletion makes a synchronized record no longer current without erasing its history.
+- A person may record or synchronize for themselves or, when permitted, another member. A limited agent may record or
+  synchronize only for members within its digitization grant; the grant does not copy the person's broader authority.
+- Measurement details do not select or change the active member.
+- `Measurement Recorded` and `Measurement Corrected` are source-neutral and occur only after an authoritative commit.
+- Corrections and retractions keep prior values available in history; the domain does not maintain a parallel history
+  model.
+- Mobile synchronization starts with step counts and sleep sessions, which are measurements.
+- Synchronization completion can include records that were not synchronized if their outcomes are known.
+- Accounts grant events express authority prerequisites; current access is checked at execution.
+- Mobile synchronization is a workflow within Health Tracking, not a third bounded context.
 
 ## Parking lot
 
-- The request and domain payload currently contain `patientId`, which conflicts with the active-member decision.
+- The current request and domain payload contain `patientId`, which conflicts with the active-member decision.
 - Correction provenance—who corrected the measurement and why—has not yet been decided.
 - Whether recording or correcting height or weight triggers BMI calculation has not been decided.
 - The correction command and its failure outcomes are not yet implemented.
-- Authentication failure occurs before either command and therefore stays outside this domain flow.
-- BMI calculation remains outside this context grouping until its triggering rule is agreed.
 - The standard FHIR representation of sleep stages has not been selected.
-- Whether mobile synchronization outcomes require durable domain events beyond the authoritative FHIR record has not
-  been decided.
-
-## Next question
-
-Does a rejected, failed, or unconfirmed mobile health record need a durable domain event to trigger recovery? If not,
-it remains a command result and synchronization status.
+- Accounts failure outcomes, grant revocation, and the current-authority contract need their own storming pass.
+- Grant provisioning into Medplum access policy has not yet been designed.
+- Whether failure outcomes or synchronization status require durable domain events beyond the authoritative FHIR
+  record has not been decided.

@@ -12,7 +12,8 @@ another family member records them.
 
 **Measurement**:
 
-A value observed about one member at a defined time or over a defined period.
+A value observed about one member at a defined time or over a defined period. Height, weight, step count, and sleep
+sessions are all measurements, regardless of how they were captured.
 
 **Measurement recorded**:
 
@@ -34,8 +35,8 @@ verified before retrying.
 
 **Recorder**:
 
-A member, family caregiver, or practitioner permitted to submit a measurement for a member. Family membership alone
-does not make someone a permitted recorder.
+A person or digitization agent permitted to submit a measurement for a member. An agent's permission is limited to
+its granted members and tasks; family membership alone does not permit recording.
 
 **Active member**:
 
@@ -62,16 +63,12 @@ A device-managed health store from which a person permits Health Tracking to rea
 
 **Source record**:
 
-A mobile health record identified by its source. It may be added, changed, or retracted by that source.
+A source-identified mobile measurement record. It may be added, changed, or retracted by that source.
 
 **Mobile health synchronization**:
 
 Reconciliation of permitted source records with the intended member's authoritative health record. Reading or saving
 a record locally does not make it synchronized.
-
-**Mobile health record synchronized**:
-
-A source record whose current state has been committed to the intended member's authoritative health record.
 
 **Source record retracted**:
 
