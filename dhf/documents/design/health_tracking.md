@@ -4,237 +4,152 @@ kind: design
 context: health-tracking
 satisfies:
   - UN-HT-001
+  - UN-HT-002
+  - UN-HT-004
 design_inputs:
   - id: DI-1
     text: >-
-      The Health Tracking server shall record a valid height measurement as a
-      FHIR Observation with recorder Provenance for the intended member and
-      shall report Measurement Recorded only after both resources are committed.
-    traces_to:
-      - UN-HT-001
+      Health Tracking shall record a committed height measurement for the
+      selected member as a Medplum FHIR Observation with recorder Provenance.
+    traces_to: [UN-HT-001]
   - id: DI-2
     text: >-
-      The Health Tracking server shall record a valid weight measurement as a
-      FHIR Observation with recorder Provenance for the intended member and
-      shall report Measurement Recorded only after both resources are committed.
-    traces_to:
-      - UN-HT-001
+      Health Tracking shall record a committed weight measurement for the
+      selected member as a Medplum FHIR Observation with recorder Provenance.
+    traces_to: [UN-HT-001]
   - id: DI-3
     text: >-
-      The Health Tracking server shall not report Measurement Recorded when
-      commit is unconfirmed and shall report the rejected, failed, or
-      unconfirmed outcome corresponding to the known result.
-    traces_to:
-      - UN-HT-001
+      Health Tracking shall report Measurement Recorded or Measurement Corrected
+      only after the corresponding Medplum commit is confirmed, and shall
+      distinguish known refusal, known failure, and unconfirmed commit.
+    traces_to: [UN-HT-001, UN-HT-004]
+  - id: DI-14
+    text: >-
+      Health Tracking shall keep the selected member as the measurement's sole
+      fixed subject and record the submitting actor separately as recorder.
+    traces_to: [UN-HT-001]
+  - id: DI-15
+    text: >-
+      Health Tracking shall present a photo-derived candidate value, unit, and
+      profile to Alice and shall commit no measurement until Alice confirms them.
+    traces_to: [UN-HT-002]
+  - id: DI-16
+    text: >-
+      Health Tracking shall retain the original source photo under Alice's
+      restricted access after either confirmation or rejection, and shall
+      record no measurement from a rejected candidate.
+    traces_to: [UN-HT-002]
+  - id: DI-17
+    text: >-
+      Health Tracking shall end the agent's access to a source photo when its
+      digitization attempt ends while preserving Alice's restricted access.
+    traces_to: [UN-HT-002]
+  - id: DI-20
+    text: >-
+      Health Tracking shall commit a measurement value correction without
+      changing its member and shall preserve the earlier value in Medplum history.
+    traces_to: [UN-HT-004]
+  - id: DI-21
+    text: >-
+      Health Tracking shall resolve a wrong-profile measurement by retracting
+      it and creating a new measurement for the correct member, never by
+      transferring the original measurement's subject.
+    traces_to: [UN-HT-004]
 ---
 
 # Health Tracking — Software Design Description
 
-**Status:** Draft.
+**Status:** Proposed design for PR1 review; not verified.
 
 ## Purpose and scope
 
-**Audience:** Developers and design reviewers.
+This SDD allocates [manual recording, photo digitization, and correction needs](../requirements/health_tracking.md) to one Health Tracking context. A measurement has one member subject; Alice or her restricted agent is a separate recorder. Photo extraction proposes a candidate, not a saved measurement. Mobile steps and sleep are covered in the [Mobile Import SDD](./mobile_health_sync.md).
 
-**Decision supported:** Understand and review the responsibility boundaries
-for recording a member's height or weight through Medplum.
+Medplum is the external FHIR repository and execution-time authorization point. The OpenAPI entities own payload shapes; this SDD does not repeat them. It describes required behavior and responsibility boundaries, not file layout or command-handler coding conventions.
 
-**Software system in scope:** The server-side Health Tracking system.
+## Design-input allocation
 
-The design covers the synchronous write path from an incoming request to a
-FHIR `Observation` and its `Provenance`. It includes command validation,
-current-actor resolution, FHIR mapping, persistence using the caller's bearer
-token, and selection of the resulting domain event.
+| Input | Baseline AC | Responsibility |
+|---|---|---|
+| `DI-14` | `AC-HT-001` | Fixed member subject and separate recorder |
+| `DI-1`, `DI-2` | `AC-HT-002`–`003` | Height and weight FHIR projection |
+| `DI-3` | `AC-HT-004`, `018` | Confirmed versus refused, failed, or uncertain outcome |
+| `DI-15` | `AC-HT-005`–`006` | Candidate review before photo-derived commit |
+| `DI-16`, `DI-17` | `AC-HT-007`–`008` | Restricted source-photo retention and attempt access |
+| `DI-20`, `DI-21` | `AC-HT-016`–`017` | Historical correction and wrong-profile retraction |
 
-The Flutter client, offline synchronization, measurement-history reads, BMI,
-daily steps, sleep, climate capture, Medplum `AccessPolicy` configuration, and
-deployment topology are outside this SDD.
+These are baseline design inputs, not evaluated risk controls.
 
-## Domain boundary
-
-Health Tracking is the single bounded context in scope. It owns measurement
-commands, rules, events, and caller-facing outcomes. Identity and access is an
-external capability. The Medplum FHIR repository is a platform seam, not a
-second bounded context.
-
-## Design input
-
-| ID     | Traces to   | Required result                                       | Baseline acceptance criterion |
-| ------ | ----------- | ----------------------------------------------------- | ----------------------------- |
-| `DI-1` | `UN-HT-001` | Record a height Observation and recorder Provenance.  | `AC-HT-001`                   |
-| `DI-2` | `UN-HT-001` | Record a weight Observation and recorder Provenance.  | `AC-HT-002`                   |
-| `DI-3` | `UN-HT-001` | Return the outcome supported by the confirmed result. | `AC-HT-003`                   |
-
-`DI-1`–`DI-3` are derived from the baseline user need. They are not risk-control requirements.
-
-The request and response payloads are defined by the OpenAPI entities and are
-not repeated in this SDD.
-
-## Design outputs
-
-| Design element              | Responsibility                                                          |
-| --------------------------- | ----------------------------------------------------------------------- |
-| Measurement command entry   | Receive a measurement command and translate its outcome                 |
-| Actor resolver              | Resolve the authenticated Medplum actor from the caller's bearer token  |
-| Record Measurement handler  | Validate the command, request persistence, and select the result event  |
-| Measurement model           | Define valid height and weight measurements and their domain vocabulary |
-| Health record gateway       | Isolate Health Tracking from Medplum persistence details                |
-| Medplum FHIR mapper         | Map the measurement and actor to `Observation` and `Provenance`         |
-| Medplum persistence adapter | Commit the FHIR resources atomically using the caller's token           |
-
-## C3 — Health Tracking server components
-
-This component view zooms into the Health Tracking server container. The
-client and Medplum are outside that container.
+## C3 — Proposed Health Tracking service responsibilities
 
 ```mermaid
-flowchart TB
-    client["Health Tracking Client<br/>External Container<br/>Collects the member and measurement"]
-    medplum["Medplum FHIR Service<br/>External Software System<br/>Identity, authorization, and FHIR persistence"]
+flowchart LR
+    caller["Alice or Limited Agent<br/>Actor via external app"]
+    medplum["Medplum<br/>External Software System<br/>FHIR storage, history, and access enforcement"]
+    accounts["Accounts Service<br/>External Container<br/>Family and agent grants"]
 
-    subgraph server["Health Tracking Server"]
-        http["Measurement Command Entry<br/>Component<br/>Receives commands and translates outcomes"]
-        identity["Actor Resolver<br/>Component<br/>Resolves the current Medplum actor"]
-        application["Record Measurement Command Handler<br/>Component<br/>Validates, persists, and selects the resulting event"]
-        domain["Measurement Domain<br/>Component<br/>Defines measurement validity rules and event vocabulary"]
-        repository["Health Record Gateway<br/>Component<br/>Isolates Medplum persistence"]
-        mapper["Medplum FHIR Mapper<br/>Component<br/>Creates Observation and Provenance resources"]
+    subgraph tracking["Health Tracking Service — Container"]
+        entry["Measurement Entry<br/>Component<br/>Receives actor-scoped commands and returns outcomes"]
+        decision["Measurement Decision<br/>Component<br/>Protects fixed subject and measurement validity"]
+        photo["Photo Review<br/>Component<br/>Keeps candidate separate until Alice confirms"]
+        correction["Correction Decision<br/>Component<br/>Corrects or retracts without subject transfer"]
+        evidence["Photo Access Boundary<br/>Component<br/>Ends agent access after attempt"]
+        fhir["Medplum Gateway<br/>Component<br/>Commits Observation and Provenance"]
     end
 
-    client -->|"Submits measurement and bearer token over HTTPS"| http
-    http -->|"Resolves the current actor"| identity
-    identity -->|"Reads the authenticated profile using FHIR API"| medplum
-    http -->|"Invokes with command and authenticated actor"| application
-    application -->|"Applies measurement rules and creates result event"| domain
-    application -->|"Requests measurement persistence"| repository
-    repository -->|"Maps domain data to FHIR resources"| mapper
-    repository -->|"Executes FHIR transaction using caller token"| medplum
+    caller -->|"Submits manual, photo-review, or correction request"| entry
+    accounts -->|"Provides grantor and selected-profile facts for provenance"| entry
+    entry -->|"Requests measurement decision"| decision
+    entry -->|"Requests candidate review"| photo
+    entry -->|"Requests correction decision"| correction
+    photo -->|"Ends attempt access"| evidence
+    decision -->|"Requests confirmed FHIR commit"| fhir
+    photo -->|"Requests commit only after Alice confirms"| fhir
+    correction -->|"Requests history-preserving change"| fhir
+    evidence -->|"Restricts retained photo access"| medplum
+    fhir -->|"Writes with caller-scoped authority"| medplum
 ```
 
-### Component responsibilities
+The arrows from Accounts carry grant facts, not a cached authorization decision. Medplum checks access again at save time. Components are logical responsibilities; the diagram does not decide deployment or require classes.
 
-- The HTTP adapter owns transport concerns and composition. It does not make
-  domain decisions.
-- The command handler receives an authenticated actor and owns the complete
-  record-measurement use case.
-- The domain component contains no identity, authorization, Medplum, or FHIR
-  concerns.
-- The Medplum persistence adapter uses the same caller token for profile
-  resolution and persistence. Medplum remains the authorization decision point.
-- The FHIR mapper isolates healthcare representation from the domain model.
-
-## Dynamic view — Record Measurement
+## Dynamic view — Photo-derived measurement
 
 ```mermaid
 sequenceDiagram
-    participant Client as Health Tracking Client
-    participant HTTP as HTTP Adapter
-    participant Identity as Medplum Identity Adapter
-    participant Handler as Record Measurement Handler
-    participant Repository as Medplum Health Repository
-    participant Medplum as Medplum FHIR Service
+    participant Alice
+    participant Agent as Limited Agent
+    participant Tracking as Health Tracking
+    participant Medplum
 
-    Client->>HTTP: POST /measurements + bearer token
-    HTTP->>Identity: Resolve current actor
-    Identity->>Medplum: Read authenticated profile
-    Medplum-->>Identity: Patient, RelatedPerson, or Practitioner
-    HTTP->>Handler: Handle command with actor
-    Handler->>Handler: Validate measurement
-
-    alt Invalid command
-        Handler-->>HTTP: Measurement Rejected
-    else Valid command
-        Handler->>Repository: Save measurement and actor
-        Repository->>Medplum: FHIR transaction: Observation + Provenance
-        alt Commit confirmed
-            Medplum-->>Repository: Transaction response
-            Repository-->>Handler: Persistence confirmed
-            Handler-->>HTTP: Measurement Recorded
-        else Commit explicitly refused or failed
-            Medplum-->>Repository: OperationOutcome
-            Repository-->>Handler: Typed failure reason
-            Handler-->>HTTP: Rejected or failed event
-        else Transport outcome uncertain
-            Repository-->>Handler: Outcome unknown
-            Handler-->>HTTP: Measurement Recording Unconfirmed
-        end
+    Alice->>Tracking: Select Alice or Charlie profile and submit photo
+    Tracking->>Agent: Permit this digitization attempt
+    Agent-->>Tracking: Candidate value and unit
+    Tracking-->>Alice: Show candidate, profile, and original photo
+    alt Alice rejects
+        Alice->>Tracking: Reject candidate
+        Tracking-->>Alice: No measurement recorded and photo retained
+    else Alice confirms
+        Alice->>Tracking: Confirm value, unit, and profile
+        Tracking->>Medplum: Commit Observation and recorder/grantor Provenance
+        Medplum-->>Tracking: Confirmed, refused, failed, or uncertain outcome
+        Tracking-->>Alice: Report only the known outcome
     end
+    Tracking->>Agent: End photo access for this attempt
 ```
 
-`Measurement Recorded` occurs only after the FHIR transaction is confirmed.
+The original photo remains restricted evidence for Alice in either review outcome. A known refusal, technical failure, or unconfirmed commit is not reported as `Measurement Recorded`.
 
-## Domain-to-FHIR mapping
+## Medplum and authorization boundary
 
-| Domain concept         | FHIR representation                                                             |
-| ---------------------- | ------------------------------------------------------------------------------- |
-| Measurement identifier | Medplum UUID stored as `Observation.id`                                         |
-| Intended member        | Medplum UUID stored in `Observation.subject.reference` as a `Patient` reference |
-| Observation time       | `Observation.effectiveDateTime` and `Provenance.occurredDateTime`               |
-| Height measurement     | Body Height profile and LOINC `8302-2`                                          |
-| Weight measurement     | Body Weight profile and LOINC `29463-7`                                         |
-| Value and unit         | `Observation.valueQuantity`, with UCUM coding                                   |
-| Authenticated actor    | `Provenance.agent.who`                                                          |
+- Health Tracking maps a committed measurement to a FHIR `Observation` and recorder/grantor provenance to `Provenance`. Medplum preserves resource history for corrections.
+- Measurement writes use the current Alice- or agent-scoped authority. There is no broad service account in the measurement write path; Medplum permission is checked on each attempted save.
+- Agent grant facts do not confer FHIR permission by themselves. A confirmed `403` after grant revocation refuses the save; an uncertain commit remains unconfirmed until reconciled.
+- [Medplum's Binary policy matcher](../../../packages/core/src/access.ts) does not apply per-photo criteria. Exact-photo temporary access may require an application-mediated boundary; its mechanism and direct Binary/presigned-URL tests remain open. `DI-17` states the desired result, not a verified mechanism.
 
-The repository writes the `Observation` and `Provenance` in one FHIR
-transaction. The `Observation` uses `PUT Observation/{id}`. The `Provenance`
-uses a conditional create keyed by the target observation.
+## Open design points
 
-## Authorization boundary
+- The retained-photo deletion period is not yet selected.
+- The photo access boundary must be chosen and tested before claiming that the agent cannot read a retained photo after attempt closure.
+- The profile-selection API contract and existing measurement implementation must be reconciled; OpenAPI owns the final shape.
 
-There is no service account in this path. The HTTP adapter extracts the
-caller's bearer token, creates a user-scoped `MedplumClient`, and resolves the
-current actor from the same client. The repository sends the FHIR transaction
-with that client. Medplum evaluates its configured access policy. A Medplum
-`403` outcome becomes a `Measurement Rejected` outcome with the reason
-`Not Permitted`.
-
-This describes existing behavior. It is not evidence that any identified
-safety or STRIDE risk is controlled.
-
-## Error behavior
-
-| Condition                            | Command outcome / HTTP response                                   |
-| ------------------------------------ | ----------------------------------------------------------------- |
-| Bearer token absent or malformed     | HTTP `401` with a FHIR `OperationOutcome`; command not invoked    |
-| Request body is not valid JSON       | HTTP `400`; command not invoked                                   |
-| Current actor unavailable            | HTTP `401` with a FHIR `OperationOutcome`; command not invoked    |
-| Measurement command or UUID invalid  | `Measurement Rejected / Invalid Measurement`; HTTP `400`          |
-| Medplum denies persistence           | `Measurement Rejected / Not Permitted`; HTTP `403`                |
-| Medplum rejects FHIR validation      | `Measurement Rejected / Invalid Measurement`; HTTP `400`          |
-| Medplum reports `429` or `5xx`       | `Measurement Recording Failed / Record Unavailable`; HTTP `503`   |
-| Transport outcome is unknown         | `Measurement Recording Unconfirmed / Outcome Unknown`; HTTP `503` |
-| Persistence succeeds                 | `Measurement Recorded`; HTTP `201`                                |
-| Other FHIR `OperationOutcome` status | Passed through by the HTTP adapter                                |
-
-## Verification and traceability
-
-| Source                   | Design input | Design output                          | Verification status                        |
-| ------------------------ | ------------ | -------------------------------------- | ------------------------------------------ |
-| `UN-HT-001`; `AC-HT-001` | `DI-1`       | Height Observation and Provenance      | Not verified in this design-only revision. |
-| `UN-HT-001`; `AC-HT-002` | `DI-2`       | Weight Observation and Provenance      | Not verified in this design-only revision. |
-| `UN-HT-001`; `AC-HT-003` | `DI-3`       | Typed command and persistence outcomes | Not verified in this design-only revision. |
-| EventStorming outcomes   | —            | Domain outcome vocabulary              | Not verified in this design-only revision. |
-
-Acceptance evidence and independent review are required before this design can
-be claimed as verified.
-
-## Risk-analysis boundary
-
-Safety risks `SAF-HT-001`–`SAF-HT-003` and STRIDE threats
-`SEC-HT-001`–`SEC-HT-006` remain identified but unevaluated. The approved
-risk matrices and acceptability criteria are missing. Consequently, this SDD
-allocates no risk-control requirements and makes no control-effectiveness or
-residual-risk claim.
-
-## Assumptions and open questions
-
-- A deployment configuration must start and manage the Health Tracking server.
-- The client and API contract for selecting the intended family member remain
-  outside this document.
-- The current command contract includes the intended member identifier, while
-  the EventStorming model says the active member comes from context. This
-  mismatch must be resolved before the design is baselined.
-- The Medplum project must define the applicable access policy; this example
-  does not create one.
-- An independent faithfulness review of the acceptance evidence is still
-  required.
+No verification evidence, control effectiveness, or residual-risk decision is claimed.

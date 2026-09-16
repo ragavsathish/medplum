@@ -4,75 +4,61 @@ kind: requirements
 context: accounts
 ---
 
-# Accounts Requirements
+# Accounts — User Needs and Baseline Acceptance Criteria
 
-**Status:** Draft workshop baseline. See the Accounts events in
-[EVENT_STORMING.md](../../../examples/medplum-health-tracking/src/contexts/health-tracking/EVENT_STORMING.md).
+**Status:** Draft design-review input. Agreed outcomes and open questions are in the [EventStorming record](../discovery/EVENT_STORMING.md). These are baseline criteria, not risk-control claims.
 
-## Onboard an account
+## Onboard Alice
 
-**UN-ACC-001:** A person needs to onboard an account linked to their authenticated identity so they can track their
-own measurements.
+**UN-ACC-001:** As Alice, I need to onboard with my authenticated identity so I can track my own wellness measurements.
 
-### Baseline acceptance criteria
+| ID | Baseline acceptance criterion | Design input |
+|---|---|---|
+| `AC-ACC-001` | After Alice authenticates, onboarding identifies one account and self-member profile for her. | `DI-ACC-001` |
+| `AC-ACC-002` | Alice can select her self-member profile to record a measurement without a separate self-link or approval. | `DI-ACC-001` |
 
-| ID | Acceptance criterion | Design input |
-| --- | --- | --- |
-| `AC-ACC-001` | Given an authenticated person, when `Onboard Account` succeeds, `Account Onboarded` identifies that person's account and self-member record. | Pending |
-| `AC-ACC-002` | The onboarded person can act as the recorder for their own member record. | Pending |
+## Add minor Charlie
 
-## Grant family access
+**UN-ACC-002:** As Alice, I need to add a profile for minor Charlie without creating a duplicate so I can record his wellness measurements without Charlie logging in.
 
-**UN-ACC-002:** A person authorized to manage Alice's access needs to grant Charlie permission to act for Alice so
-Charlie can record or synchronize Alice's measurements.
+| ID | Baseline acceptance criterion | Design input |
+|---|---|---|
+| `AC-ACC-003` | Alice can state her parent or guardian relationship and create Charlie's minor profile; Charlie receives no login or in-app approval request. | `DI-ACC-002` |
+| `AC-ACC-004` | After Charlie's family link and Alice's access are active, Alice can select Charlie's profile to record his measurements. | `DI-ACC-003` |
+| `AC-ACC-005` | When Charlie's identifier matches an existing Patient, online onboarding stops without creating a duplicate or automatically linking or disclosing that Patient. | `DI-ACC-004` |
+| `AC-ACC-006` | If Alice's Charlie access cannot be activated, the family link is not reported as complete. | `DI-ACC-003` |
 
-### Baseline acceptance criteria
+The collision message and Medplum admin recovery path remain open; this draft does not invent acceptance criteria for them.
 
-| ID | Acceptance criterion | Design input |
-| --- | --- | --- |
-| `AC-ACC-003` | When `Grant Charlie Access to Alice` succeeds, the grant identifies Charlie as the actor and Alice as the member, and `Charlie Access Granted to Alice` is reported. | Pending |
-| `AC-ACC-004` | While the grant is current, Charlie can request recording or synchronization for Alice; Alice remains the intended member. | Pending |
+## Delegate digitization
 
-## Grant limited agent access
+**UN-ACC-003:** As Alice, I need to grant and revoke an agent's digitization access for selected family profiles so it can help with measurements without receiving my broader access.
 
-**UN-ACC-003:** A person authorized for Alice and Charlie needs to delegate measurement digitization to an agent with
-narrower access than their own so the agent can handle those members' measurements but no unrelated members or tasks.
+| ID | Baseline acceptance criterion | Design input |
+|---|---|---|
+| `AC-ACC-007` | Alice can grant digitization for selected profiles; the grant identifies Alice, the agent, the selected profiles, and the permitted task. | `DI-ACC-005` |
+| `AC-ACC-008` | The agent can submit digitized measurements only for currently granted profiles and tasks; Alice's own access remains separate. | `DI-ACC-005` |
+| `AC-ACC-009` | Removing Charlie from the agent grant ends its Charlie access while leaving its Alice access and Alice's own Charlie access unchanged. | `DI-ACC-006` |
+| `AC-ACC-010` | A delayed agent submission for a revoked profile is refused at save time rather than recorded. | `DI-ACC-006` |
 
-### Baseline acceptance criteria
+Mobile source permission is a separate choice from this grant; the agent need not connect a mobile source to digitize a photo.
 
-| ID | Acceptance criterion | Design input |
-| --- | --- | --- |
-| `AC-ACC-005` | When `Grant Digitization Access` succeeds, `Agent Access Granted` identifies the agent, Alice and Charlie as intended members, and recording or synchronization as the permitted digitization tasks; it does not copy the person's broader access. | Pending |
-| `AC-ACC-006` | At execution, the agent can request recording or synchronization only while its current grant covers the intended member and task; an out-of-scope request is refused. | Pending |
+## End the Charlie family link
 
-These criteria come directly from the three user needs. They do not claim that any safety or security risk has been
-controlled. Account failure outcomes, revocation, and the grant-to-Medplum policy contract still need storming and
-design allocation.
+**UN-ACC-004:** As Alice, I need to end Charlie's family link so neither I nor my agent can continue acting for him through that link.
 
-## Safety analysis
-
-| ID | Hazardous sequence | Hazardous situation | Possible harm | Status |
-| --- | --- | --- | --- | --- |
-| `SAF-ACC-001` | An account is linked to the wrong member. | One person's measurements are recorded or viewed as another's. | Incorrect assessment or care. | Identified; not yet evaluated. |
-| `SAF-ACC-002` | A family or agent grant names the wrong actor or member. | Measurements are submitted to an unintended member record. | Incorrect assessment or care. | Identified; not yet evaluated. |
-
-## STRIDE analysis
-
-| ID | Category | Threat | Related safety risk | Status |
-| --- | --- | --- | --- | --- |
-| `SEC-ACC-001` | Spoofing | An authenticated identity is represented as another account or member. | `SAF-ACC-001` | Identified; not yet evaluated. |
-| `SEC-ACC-002` | Elevation of privilege | A person or agent receives authority for an unintended member or task. | `SAF-ACC-002` | Identified; not yet evaluated. |
-| `SEC-ACC-003` | Tampering | Grant actor, member, task, or current status is altered. | `SAF-ACC-002` | Identified; not yet evaluated. |
+| ID | Baseline acceptance criterion | Design input |
+|---|---|---|
+| `AC-ACC-011` | Ending the link removes both Alice's and the agent's derivative Charlie access before `Charlie Unlinked from Alice's Family` is reported. | `DI-ACC-007` |
+| `AC-ACC-012` | If either access removal fails, the link remains active and the unlink is reported as failed, not complete. | `DI-ACC-007` |
 
 ## Traceability
 
-| User need | Event-storming outcome | Baseline acceptance criteria | Design allocation |
-| --- | --- | --- | --- |
-| `UN-ACC-001` | `Account Onboarded` | `AC-ACC-001`–`AC-ACC-002` | Pending |
-| `UN-ACC-002` | `Charlie Access Granted to Alice` | `AC-ACC-003`–`AC-ACC-004` | Pending |
-| `UN-ACC-003` | `Agent Access Granted` | `AC-ACC-005`–`AC-ACC-006` | Pending |
+| User need | EventStorming outcome | AC | Design description |
+|---|---|---|---|
+| `UN-ACC-001` | Account Onboarded | `AC-ACC-001`–`002` | [Accounts SDD](../design/accounts.md) |
+| `UN-ACC-002` | Charlie's Minor Profile Created; Family Link Failed | `AC-ACC-003`–`006` | [Accounts SDD](../design/accounts.md) |
+| `UN-ACC-003` | Agent Access Granted; Agent Access to Charlie Revoked | `AC-ACC-007`–`010` | [Accounts SDD](../design/accounts.md) |
+| `UN-ACC-004` | Charlie Unlinked; Family Unlink Failed | `AC-ACC-011`–`012` | [Accounts SDD](../design/accounts.md) |
 
-## Risk gate
-
-Approved risk-acceptability criteria are not yet available. The identified risks remain unevaluated; no control,
-verification evidence, residual-risk decision, or risk-derived acceptance criterion is claimed.
+Safety and STRIDE evaluation remains separate. No risk-based AC or verified control is added here.
