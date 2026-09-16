@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { LoginAuthenticationResponse } from '@medplum/core';
 import { createReference, MedplumClient } from '@medplum/core';
-import type { AccessPolicy, ProjectMembership, ResourceType } from '@medplum/fhirtypes';
+import type { AccessPolicy, Patient, ProjectMembership, ResourceType } from '@medplum/fhirtypes';
 import * as allure from 'allure-js-commons';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
@@ -10,10 +10,14 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createAccountsHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/accounts/infra/http/accountsHttpApp';
+import { createKeycloakAccountIdentityProvider } from '../../../examples/medplum-health-tracking/src/contexts/accounts/infra/keycloak/keycloakAccountIdentityProvider';
 import { createMedplumAccountsProvisioner } from '../../../examples/medplum-health-tracking/src/contexts/accounts/infra/medplum/medplumAccountsProvisioner';
 
 const runDockerAcceptance = process.env['MEDPLUM_DOCKER_ACCEPTANCE'] === '1';
 const medplumBaseUrl = process.env['MEDPLUM_BASE_URL'] ?? 'http://localhost:8103/';
+const keycloakBaseUrl = process.env['KEYCLOAK_BASE_URL'] ?? 'http://localhost:8180/';
+const keycloakRealm = 'family-wellness';
+const keycloakPatientIdentifierSystem = 'https://family.example/identity/keycloak-sub';
 const createdResources: { resourceType: ResourceType; id: string }[] = [];
 let admin: MedplumClient;
 let owner: MedplumClient;
@@ -27,6 +31,8 @@ let agentMembership: ProjectMembership;
 let ownerPatientId: string;
 let ownerAccountId: string;
 let agentAccountId: string;
+let ownerKeycloakToken: string;
+let ownerKeycloakSubject: string;
 
 describe.skipIf(!runDockerAcceptance)('Accounts HTTP API — Docker Medplum', () => {
   beforeAll(async () => {
@@ -61,6 +67,20 @@ describe.skipIf(!runDockerAcceptance)('Accounts HTTP API — Docker Medplum', ()
     ownerPatientId = referenceId(ownerMembership.profile?.reference);
     ownerAccountId = referenceId(ownerMembership.user?.reference);
     agentAccountId = referenceId(agentMembership.user?.reference);
+    const keycloakAuthentication = await loginToDockerKeycloak();
+    ownerKeycloakToken = keycloakAuthentication.accessToken;
+    ownerKeycloakSubject = keycloakAuthentication.subject;
+
+    const ownerPatient = await admin.readResource<Patient>('Patient', ownerPatientId);
+    await admin.updateResource<Patient>({
+      ...ownerPatient,
+      identifier: [
+        ...(ownerPatient.identifier ?? []).filter(
+          (identifier) => identifier.system !== keycloakPatientIdentifierSystem
+        ),
+        { system: keycloakPatientIdentifierSystem, value: ownerKeycloakSubject },
+      ],
+    });
 
     ownerPolicy = await admin.updateResource<AccessPolicy>({
       ...ownerPolicy,
@@ -82,11 +102,20 @@ describe.skipIf(!runDockerAcceptance)('Accounts HTTP API — Docker Medplum', ()
     const provisioner = createMedplumAccountsProvisioner({
       baseUrl: medplumBaseUrl,
       accessToken: requiredToken(admin),
-      ownerPolicyIdByAccountId: new Map([[ownerAccountId, ownerPolicy.id]]),
+      ownerPolicyIdByAccountId: new Map([[ownerKeycloakSubject, ownerPolicy.id]]),
       agentPolicyIdByAgentId: new Map([[agentAccountId, agentPolicy.id]]),
       onError: (error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`),
     });
-    const listening = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+    const identityProvider = createKeycloakAccountIdentityProvider({
+      keycloakBaseUrl,
+      realm: keycloakRealm,
+      medplumBaseUrl,
+      medplumAccessToken: requiredToken(admin),
+      patientIdentifierSystem: keycloakPatientIdentifierSystem,
+    });
+    const listening = await listen(
+      createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner, identityProvider }))
+    );
     appServer = listening.server;
     appUrl = listening.url;
   }, 60_000);
@@ -183,6 +212,7 @@ describe.skipIf(!runDockerAcceptance)('Accounts HTTP API — Docker Medplum', ()
       JSON.stringify(
         {
           ownerAccountId,
+          ownerKeycloakSubject,
           agentAccountId,
           ownerPatientId,
           minorId,
@@ -230,10 +260,35 @@ async function inviteUser(
 async function postAsOwner(path: string, body?: unknown): Promise<{ status: number; body: unknown }> {
   const response = await fetch(new URL(path, appUrl), {
     method: 'POST',
-    headers: { authorization: `Bearer ${requiredToken(owner)}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${ownerKeycloakToken}`, 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   return { status: response.status, body: await response.json() };
+}
+
+async function loginToDockerKeycloak(): Promise<{ accessToken: string; subject: string }> {
+  const response = await fetch(new URL(`realms/${keycloakRealm}/protocol/openid-connect/token`, keycloakBaseUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'password',
+        client_id: 'accounts-api',
+        username: 'alice',
+        password: 'alice-password',
+        scope: 'openid',
+      }),
+  });
+  const tokens = (await response.json()) as { access_token?: string };
+  if (!tokens.access_token) {
+    throw new Error(`Keycloak token request failed with HTTP ${response.status}`);
+  }
+  const payload = JSON.parse(Buffer.from(tokens.access_token.split('.')[1] ?? '', 'base64url').toString()) as {
+    sub?: unknown;
+  };
+  if (typeof payload.sub !== 'string') {
+    throw new Error('Keycloak access token has no subject');
+  }
+  return { accessToken: tokens.access_token, subject: payload.sub };
 }
 
 async function createObservation(client: MedplumClient, patientId: string): Promise<{ status: number; body: unknown }> {
