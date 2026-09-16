@@ -2,69 +2,32 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { Express } from 'express';
 import express from 'express';
+import type {
+  AccountsProvisioner,
+  AgentGrantCommand,
+  CreateMinorProfileCommand,
+} from '../../application/ports/accountsProvisioner';
+import type { AccountsRepository } from '../../application/ports/accountsRepository';
+import type { AgentTask } from '../../domain/account';
+import {
+  activateFamilyLink,
+  endFamilyLink,
+  onboardAccount,
+  registerMinorProfile,
+  replaceAgentGrant,
+  revokeAgentMemberAccess,
+} from '../../domain/account';
+import { createInMemoryAccountsRepository } from '../memory/inMemoryAccountsRepository';
 import { ACCOUNTS_OPENAPI } from './accountsOpenApi';
+
+export type { AccountsProvisioner } from '../../application/ports/accountsProvisioner';
 
 const BEARER_TOKEN = /^Bearer\s+(\S+)$/i;
 
 type AccountsHttpAppOptions = {
   readonly medplumBaseUrl: string;
   readonly provisioner?: AccountsProvisioner;
-};
-
-export type AccountsProvisioner = {
-  createMinorProfile(
-    command: CreateMinorProfileCommand
-  ): Promise<
-    | { readonly ok: true; readonly memberId?: string }
-    | { readonly ok: false; readonly reason: 'IDENTIFIER_COLLISION' | 'UNAVAILABLE' }
-  >;
-  activateOwnerAccess?(
-    command: MemberAccessCommand
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: 'UNAVAILABLE' }>;
-  activateAgentAccess?(
-    command: AgentGrantCommand
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: 'UNAVAILABLE' }>;
-  deactivateAgentAccess?(
-    command: AgentMemberAccessCommand
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: 'UNAVAILABLE' }>;
-  deactivateFamilyAccess?(
-    command: FamilyAccessCommand
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: 'UNAVAILABLE' }>;
-};
-
-type MemberAccessCommand = {
-  readonly accountId: string;
-  readonly memberId: string;
-};
-
-type AgentGrantCommand = {
-  readonly grantorAccountId: string;
-  readonly agentId: string;
-  readonly memberIds: string[];
-  readonly tasks: string[];
-};
-
-type AgentMemberAccessCommand = {
-  readonly grantorAccountId: string;
-  readonly agentId: string;
-  readonly memberId: string;
-};
-
-type FamilyAccessCommand = {
-  readonly accountId: string;
-  readonly memberId: string;
-  readonly derivativeAgentIds: string[];
-};
-
-type CreateMinorProfileCommand = {
-  readonly accountId: string;
-  readonly member: {
-    readonly id: string;
-    readonly identifier: { readonly system: string; readonly value: string };
-    readonly name: { readonly given: string[]; readonly family: string };
-    readonly birthDate: string;
-  };
-  readonly relationship: 'parent' | 'guardian';
+  readonly accountsRepository?: AccountsRepository;
 };
 
 type AccountSession = {
@@ -74,35 +37,19 @@ type AccountSession = {
 
 export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express {
   const app = express();
-  const accounts = new Map<
-    string,
-    {
-      readonly selfMemberId: string;
-      readonly minorProfileIds: Set<string>;
-      readonly linkedMemberIds: Set<string>;
-      readonly agentGrants: Map<string, { readonly memberIds: Set<string>; readonly tasks: Set<string> }>;
-    }
-  >();
+  const accountsRepository = options.accountsRepository ?? createInMemoryAccountsRepository();
 
   app.use(express.json());
 
   app.get('/accounts/openapi.json', (_request, response) => response.status(200).json(ACCOUNTS_OPENAPI));
 
   app.post('/accounts/onboard', async (request, response) => {
-    const accessToken = request.get('authorization')?.match(BEARER_TOKEN)?.[1];
-    if (!accessToken) {
+    const authentication = await authenticateAccount(options.medplumBaseUrl, request.get('authorization'));
+    if (!authentication.ok) {
       response.status(401).json({ code: 'AUTHENTICATION_REQUIRED' });
       return;
     }
-
-    const sessionResponse = await fetch(new URL('auth/me', options.medplumBaseUrl), {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    if (sessionResponse.status === 401) {
-      response.status(401).json({ code: 'AUTHENTICATION_REQUIRED' });
-      return;
-    }
-    const session = (await sessionResponse.json()) as AccountSession;
+    const session = authentication.session;
     const accountId = session.user?.id;
     const selfMember = session.profile;
 
@@ -110,6 +57,10 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       response.status(409).json({ code: 'SELF_MEMBER_UNAVAILABLE' });
       return;
     }
+
+    const existingAccount = await accountsRepository.find(accountId);
+    const account = onboardAccount(existingAccount, accountId, selfMember.id);
+    await accountsRepository.save(account);
 
     response.status(200).json({
       type: 'ACCOUNT_ONBOARDED',
@@ -119,27 +70,17 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
         selectableMembers: [selfMember],
       },
     });
-    accounts.set(accountId, {
-      selfMemberId: selfMember.id,
-      minorProfileIds: new Set(),
-      linkedMemberIds: new Set(),
-      agentGrants: new Map(),
-    });
   });
 
   app.post('/accounts/minor-profiles', async (request, response) => {
-    const accessToken = request.get('authorization')?.match(BEARER_TOKEN)?.[1];
-    if (!accessToken) {
+    const authentication = await authenticateAccount(options.medplumBaseUrl, request.get('authorization'));
+    if (!authentication.ok) {
       response.status(401).json({ code: 'AUTHENTICATION_REQUIRED' });
       return;
     }
-
-    const sessionResponse = await fetch(new URL('auth/me', options.medplumBaseUrl), {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    const session = (await sessionResponse.json()) as AccountSession;
+    const session = authentication.session;
     const accountId = session.user?.id;
-    const account = accountId ? accounts.get(accountId) : undefined;
+    const account = accountId ? await accountsRepository.find(accountId) : undefined;
     if (!accountId || !account) {
       response.status(409).json({ code: 'ACCOUNT_NOT_ONBOARDED' });
       return;
@@ -190,7 +131,7 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
     }
 
     const memberId = result.memberId ?? command.member.id;
-    account.minorProfileIds.add(memberId);
+    await accountsRepository.save(registerMinorProfile(account, memberId));
 
     response.status(201).json({
       type: 'MINOR_PROFILE_CREATED',
@@ -202,18 +143,14 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   app.post('/accounts/family-links', async (request, response) => {
-    const accessToken = request.get('authorization')?.match(BEARER_TOKEN)?.[1];
-    if (!accessToken) {
+    const authentication = await authenticateAccount(options.medplumBaseUrl, request.get('authorization'));
+    if (!authentication.ok) {
       response.status(401).json({ code: 'AUTHENTICATION_REQUIRED' });
       return;
     }
-
-    const sessionResponse = await fetch(new URL('auth/me', options.medplumBaseUrl), {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    const session = (await sessionResponse.json()) as AccountSession;
+    const session = authentication.session;
     const accountId = session.user?.id;
-    const account = accountId ? accounts.get(accountId) : undefined;
+    const account = accountId ? await accountsRepository.find(accountId) : undefined;
     const memberId = typeof request.body?.memberId === 'string' ? request.body.memberId : undefined;
     if (!accountId || !account || !memberId || !account.minorProfileIds.has(memberId)) {
       response.status(409).json({ code: 'MINOR_PROFILE_NOT_AVAILABLE' });
@@ -230,12 +167,13 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       return;
     }
 
-    account.linkedMemberIds.add(memberId);
+    const linkedAccount = activateFamilyLink(account, memberId);
+    await accountsRepository.save(linkedAccount);
     response.status(201).json({
       type: 'FAMILY_LINK_ACTIVATED',
       payload: {
         member: { resourceType: 'Patient', id: memberId },
-        selectableMembers: [account.selfMemberId, ...account.linkedMemberIds].map((id) => ({
+        selectableMembers: [linkedAccount.selfMemberId, ...linkedAccount.linkedMemberIds].map((id) => ({
           resourceType: 'Patient',
           id,
         })),
@@ -244,25 +182,22 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   app.post('/accounts/agent-grants', async (request, response) => {
-    const accessToken = request.get('authorization')?.match(BEARER_TOKEN)?.[1];
-    if (!accessToken) {
+    const authentication = await authenticateAccount(options.medplumBaseUrl, request.get('authorization'));
+    if (!authentication.ok) {
       response.status(401).json({ code: 'AUTHENTICATION_REQUIRED' });
       return;
     }
-
-    const sessionResponse = await fetch(new URL('auth/me', options.medplumBaseUrl), {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    const session = (await sessionResponse.json()) as AccountSession;
+    const session = authentication.session;
     const accountId = session.user?.id;
-    const account = accountId ? accounts.get(accountId) : undefined;
+    const account = accountId ? await accountsRepository.find(accountId) : undefined;
     const agentId = typeof request.body?.agentId === 'string' ? request.body.agentId : undefined;
     const memberIds = Array.isArray(request.body?.memberIds)
       ? request.body.memberIds.filter((id: unknown): id is string => typeof id === 'string')
       : [];
-    const tasks = Array.isArray(request.body?.tasks)
+    const requestedTasks = Array.isArray(request.body?.tasks)
       ? request.body.tasks.filter((task: unknown): task is string => typeof task === 'string')
       : [];
+    const tasks = requestedTasks as AgentTask[];
     const permittedMemberIds = account ? new Set([account.selfMemberId, ...account.linkedMemberIds]) : new Set();
 
     if (
@@ -271,7 +206,8 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       !agentId ||
       memberIds.length === 0 ||
       tasks.length === 0 ||
-      tasks.some((task: string) => task !== 'digitize-measurement') ||
+      requestedTasks.length !== request.body?.tasks?.length ||
+      requestedTasks.some((task: string) => task !== 'digitize-measurement') ||
       memberIds.some((id: string) => !permittedMemberIds.has(id))
     ) {
       response.status(400).json({ code: 'INVALID_AGENT_GRANT' });
@@ -286,6 +222,7 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       grantorAccountId: accountId,
       agentId,
       memberIds,
+      previousMemberIds: [...(account.agentGrants.get(agentId)?.memberIds ?? [])],
       tasks,
     };
     const result = await options.provisioner.activateAgentAccess(command);
@@ -294,23 +231,22 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       return;
     }
 
-    account.agentGrants.set(agentId, { memberIds: new Set(memberIds), tasks: new Set(tasks) });
-    response.status(201).json({ type: 'AGENT_ACCESS_GRANTED', payload: command });
+    await accountsRepository.save(replaceAgentGrant(account, agentId, memberIds, tasks));
+    response.status(201).json({
+      type: 'AGENT_ACCESS_GRANTED',
+      payload: { grantorAccountId: accountId, agentId, memberIds, tasks },
+    });
   });
 
   app.post('/accounts/agent-grants/revoke-member', async (request, response) => {
-    const accessToken = request.get('authorization')?.match(BEARER_TOKEN)?.[1];
-    if (!accessToken) {
+    const authentication = await authenticateAccount(options.medplumBaseUrl, request.get('authorization'));
+    if (!authentication.ok) {
       response.status(401).json({ code: 'AUTHENTICATION_REQUIRED' });
       return;
     }
-
-    const sessionResponse = await fetch(new URL('auth/me', options.medplumBaseUrl), {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    const session = (await sessionResponse.json()) as AccountSession;
+    const session = authentication.session;
     const accountId = session.user?.id;
-    const account = accountId ? accounts.get(accountId) : undefined;
+    const account = accountId ? await accountsRepository.find(accountId) : undefined;
     const agentId = typeof request.body?.agentId === 'string' ? request.body.agentId : undefined;
     const memberId = typeof request.body?.memberId === 'string' ? request.body.memberId : undefined;
     const grant = agentId ? account?.agentGrants.get(agentId) : undefined;
@@ -333,30 +269,27 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       return;
     }
 
-    grant.memberIds.delete(memberId);
+    const revokedAccount = revokeAgentMemberAccess(account, agentId, memberId);
+    await accountsRepository.save(revokedAccount);
     response.status(200).json({
       type: 'AGENT_MEMBER_ACCESS_REVOKED',
       payload: {
         agentId,
         revokedMemberId: memberId,
-        remainingMemberIds: [...grant.memberIds],
+        remainingMemberIds: [...(revokedAccount.agentGrants.get(agentId)?.memberIds ?? [])],
       },
     });
   });
 
   app.post('/accounts/family-links/unlink', async (request, response) => {
-    const accessToken = request.get('authorization')?.match(BEARER_TOKEN)?.[1];
-    if (!accessToken) {
+    const authentication = await authenticateAccount(options.medplumBaseUrl, request.get('authorization'));
+    if (!authentication.ok) {
       response.status(401).json({ code: 'AUTHENTICATION_REQUIRED' });
       return;
     }
-
-    const sessionResponse = await fetch(new URL('auth/me', options.medplumBaseUrl), {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    const session = (await sessionResponse.json()) as AccountSession;
+    const session = authentication.session;
     const accountId = session.user?.id;
-    const account = accountId ? accounts.get(accountId) : undefined;
+    const account = accountId ? await accountsRepository.find(accountId) : undefined;
     const memberId = typeof request.body?.memberId === 'string' ? request.body.memberId : undefined;
     if (!accountId || !account || !memberId || !account.linkedMemberIds.has(memberId)) {
       response.status(409).json({ code: 'FAMILY_LINK_NOT_ACTIVE' });
@@ -380,15 +313,13 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       return;
     }
 
-    account.linkedMemberIds.delete(memberId);
-    for (const grant of account.agentGrants.values()) {
-      grant.memberIds.delete(memberId);
-    }
+    const unlinkedAccount = endFamilyLink(account, memberId);
+    await accountsRepository.save(unlinkedAccount);
     response.status(200).json({
       type: 'FAMILY_LINK_ENDED',
       payload: {
         memberId,
-        selectableMembers: [account.selfMemberId, ...account.linkedMemberIds].map((id) => ({
+        selectableMembers: [unlinkedAccount.selfMemberId, ...unlinkedAccount.linkedMemberIds].map((id) => ({
           resourceType: 'Patient',
           id,
         })),
@@ -397,4 +328,21 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   return app;
+}
+
+async function authenticateAccount(
+  medplumBaseUrl: string,
+  authorization: string | undefined
+): Promise<{ readonly ok: true; readonly session: AccountSession } | { readonly ok: false }> {
+  const accessToken = authorization?.match(BEARER_TOKEN)?.[1];
+  if (!accessToken) {
+    return { ok: false };
+  }
+  const response = await fetch(new URL('auth/me', medplumBaseUrl), {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    return { ok: false };
+  }
+  return { ok: true, session: (await response.json()) as AccountSession };
 }
