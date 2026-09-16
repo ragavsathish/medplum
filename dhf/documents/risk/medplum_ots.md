@@ -13,12 +13,16 @@ Medplum is an off-the-shelf software dependency shared by Accounts and Health Tr
 
 ## Identification
 
+RDM references: [[62304:8.1.2.a]] [[62304:8.1.2.b]] [[62304:8.1.2.c]]
+
 | Item | Current evidence | Open evidence |
 |---|---|---|
 | Source reviewed | Commit `771a512d24b31948fcfc78dacdd6fbe36b72e416`; server and core version `5.1.37` | Correspondence to the deployed artifacts and local modifications |
 | Deployment | [Compose](../../../docker-compose.full-stack.yml#L43) uses `medplum/medplum-server:latest` and `medplum/medplum-app:latest` | Immutable image digests, effective configuration, and Cloud versus self-hosted decision |
 | Supporting software | PostgreSQL 16, Redis 7, package lock, and Binary storage are present in the reviewed source/configuration | Deployed runtime, operating-system packages, SBOM, backup, and storage configuration |
 | Supplier | Orangebot, Inc. and Medplum contributors | Applicable support agreement, owner, response commitments, and end-of-life date |
+
+The linked Compose file is the currently identified system configuration document. [[62304:8.1.3]] It is not evidence of the effective or qualified deployed configuration.
 
 ## Relied-on functions
 

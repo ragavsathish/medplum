@@ -122,3 +122,5 @@ flowchart TD
 ## Review outcome
 
 The candidate images now have SBOM and Grype evidence. Applicability and risk evaluation remain blocked until the deployed baseline, configuration, Critical/High finding dispositions, support terms, complete license evidence, and approved risk criteria are available. No control, residual-risk decision, or risk-based acceptance criterion is added.
+
+The Class A maintenance, feedback, change-impact, and trend-analysis checklist items remain open. They are deliberately not annotated with RDM coverage markers: `62304:6.1.f`, `62304:6.2.1.1`–`62304:6.2.1.3`, `62304:7.4.1.a`–`62304:7.4.1.b`, and `62304:9.6`.
