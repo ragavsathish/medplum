@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 import type { AccessPolicy, AccessPolicyResource, Bundle, Patient } from '@medplum/fhirtypes';
-import type { AccountsProvisioner } from '../http/accountsHttpApp';
+import type { AccountsProvisioner } from '../../application/ports/accountsProvisioner';
 
 const FAMILY_RELATIONSHIP_EXTENSION =
   'https://family.example/fhir/StructureDefinition/self-reported-family-relationship';
@@ -26,16 +26,7 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
   return {
     async createMinorProfile(command: CreateMinorProfileCommand) {
       try {
-        const query = new URLSearchParams({
-          identifier: `${command.member.identifier.system}|${command.member.identifier.value}`,
-          _count: '1',
-        });
-        const matches = await request<Bundle<Patient>>('GET', `Patient?${query.toString()}`);
-        if ((matches.total ?? matches.entry?.length ?? 0) > 0) {
-          return { ok: false, reason: 'IDENTIFIER_COLLISION' } as const;
-        }
-
-        const created = await request<Patient>('POST', 'Patient', {
+        const created = await conditionalCreatePatient(options, {
           resourceType: 'Patient',
           identifier: [command.member.identifier],
           name: [command.member.name],
@@ -50,7 +41,9 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
             },
           ],
         });
-        return { ok: true, memberId: created.id } as const;
+        return created.created
+          ? ({ ok: true, memberId: created.patient.id } as const)
+          : ({ ok: false, reason: 'IDENTIFIER_COLLISION' } as const);
       } catch (error) {
         options.onError?.(error);
         return { ok: false, reason: 'UNAVAILABLE' } as const;
@@ -66,6 +59,9 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
       const policyId = options.agentPolicyIdByAgentId.get(command.agentId);
       return mutateOnePolicy(request, policyId, (rules) => {
         let next = rules;
+        for (const memberId of command.previousMemberIds) {
+          next = removeMemberRules(next, memberId);
+        }
         for (const memberId of command.memberIds) {
           next = addMemberRules(next, memberId, true);
         }
@@ -88,29 +84,46 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
       }
 
       const policyIds = [ownerPolicyId, ...(agentPolicyIds as string[])];
-      let originals: AccessPolicy[] = [];
-      let successfullyUpdated = 0;
       try {
-        originals = await Promise.all(policyIds.map((id) => request<AccessPolicy>('GET', `AccessPolicy/${id}`)));
-        for (const policy of originals) {
-          const next = { ...policy, resource: removeMemberRules(policy.resource ?? [], command.memberId) };
-          await request<AccessPolicy>('PUT', `AccessPolicy/${policy.id}`, next);
-          successfullyUpdated += 1;
-        }
+        const originals = await Promise.all(policyIds.map((id) => request<AccessPolicy>('GET', `AccessPolicy/${id}`)));
+        await request<Bundle>('POST', '', {
+          resourceType: 'Bundle',
+          type: 'transaction',
+          entry: originals.map((policy) => ({
+            resource: { ...policy, resource: removeMemberRules(policy.resource ?? [], command.memberId) },
+            request: { method: 'PUT', url: `AccessPolicy/${policy.id}` },
+          })),
+        });
         return { ok: true } as const;
       } catch (error) {
         options.onError?.(error);
-        await Promise.all(
-          originals
-            .slice(0, successfullyUpdated)
-            .map((original) =>
-              request<AccessPolicy>('PUT', `AccessPolicy/${original.id}`, original).catch(() => undefined)
-            )
-        );
         return { ok: false, reason: 'UNAVAILABLE' } as const;
       }
     },
   };
+}
+
+async function conditionalCreatePatient(
+  options: MedplumAccountsProvisionerOptions,
+  patient: Patient
+): Promise<{ readonly created: boolean; readonly patient: Patient }> {
+  const identifier = patient.identifier?.[0];
+  if (!identifier?.system || !identifier.value) {
+    throw new Error('Conditional Patient creation requires a complete identifier');
+  }
+  const response = await fetch(new URL('fhir/R4/Patient', options.baseUrl), {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${options.accessToken}`,
+      'content-type': 'application/fhir+json',
+      'if-none-exist': `identifier=${identifier.system}|${identifier.value}`,
+    },
+    body: JSON.stringify(patient),
+  });
+  if (!response.ok) {
+    throw new Error(`Medplum conditional Patient create failed with HTTP ${response.status}: ${await response.text()}`);
+  }
+  return { created: response.status === 201, patient: (await response.json()) as Patient };
 }
 
 function createFhirRequester(options: MedplumAccountsProvisionerOptions) {
