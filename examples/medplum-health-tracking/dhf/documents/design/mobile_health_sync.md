@@ -8,14 +8,14 @@ design_inputs:
   - id: DI-4
     text: >-
       Health Tracking shall automatically record a new permitted,
-      Alice-attributed mobile step measurement in Medplum after agent access
-      and source permission are active.
+      Alice-attributed mobile step measurement in Medplum only while Alice's
+      Digitization Bot grant and platform source permission are active.
     traces_to: [UN-HT-003]
   - id: DI-5
     text: >-
       Health Tracking shall automatically record a new permitted,
-      Alice-attributed mobile sleep session in Medplum after agent access
-      and source permission are active.
+      Alice-attributed mobile sleep session in Medplum only while Alice's
+      Digitization Bot grant and platform source permission are active.
     traces_to: [UN-HT-003]
   - id: DI-6
     text: >-
@@ -40,8 +40,9 @@ design_inputs:
     traces_to: [UN-HT-003]
   - id: DI-13
     text: >-
-      Health Tracking shall import only mobile record types available under
-      Alice's current platform source permission and current agent grant.
+      Health Tracking shall deny Digitization Bot import when Alice has not
+      granted it access, and otherwise import only mobile record types available
+      under her current platform source permission and current Bot grant.
     traces_to: [UN-HT-003]
   - id: DI-18
     text: >-
@@ -62,7 +63,7 @@ design_inputs:
 
 ## Purpose and scope
 
-This SDD allocates [Alice's mobile-import user need and AC](../requirements/health_tracking.md) to the structured steps and sleep path. Both Apple Health and Android Health Connect are possible source systems. Alice grants platform read permission separately from the agent's narrow Medplum digitization grant. The agent auto-submits only Alice-attributed data. Charlie may be recorded manually or through a reviewed photo, but is not inferred from a shared mobile health source.
+This SDD allocates [Alice's mobile-import user need and AC](../requirements/health_tracking.md) to the structured steps and sleep path. Both Apple Health and Android Health Connect are possible source systems. The digitization agent is the Medplum Bot service actor. Alice grants platform read permission separately from the Bot's narrow digitization grant. The Bot auto-submits only Alice-attributed data. Charlie may be recorded manually or through a reviewed photo, but is not inferred from a shared mobile health source.
 
 The MVP sleep fact is one session's start, end, and total duration. Sleep stages, other mobile types, and offline capture/sync are later slices. The OpenAPI entities own payload shapes; this SDD does not repeat them.
 
@@ -70,7 +71,7 @@ The MVP sleep fact is one session's start, end, and total duration. Sleep stages
 
 | Input | Baseline AC | Responsibility |
 |---|---|---|
-| `DI-13` | `AC-HT-009` | Separate platform source permission and agent grant |
+| `DI-13` | `AC-HT-009` | Separate platform source permission and Bot grant |
 | `DI-4`, `DI-6` | `AC-HT-010` | Automatic step import with count and period |
 | `DI-5`, `DI-7` | `AC-HT-011` | Automatic sleep import with session period and duration |
 | `DI-18` | `AC-HT-012` | Explicit Alice source attribution |
@@ -89,7 +90,7 @@ flowchart LR
 
     subgraph wellness["Family Wellness"]
         app["Flutter App<br/>Container<br/>Source permission and Alice's status view"]
-        agent["Digitization Agent<br/>Container: runnable process; location open<br/>Auto-imports with restricted authority"]
+        agent["Medplum Digitization Bot<br/>Server-side Bot runtime<br/>Auto-imports with restricted authority"]
         tracking["Health Tracking Service<br/>Container<br/>Applies measurement decisions and FHIR projection"]
     end
 
@@ -97,30 +98,32 @@ flowchart LR
     app -->|"Reads only permitted step and sleep types"| source
     app -->|"Provides Alice-attributed source changes"| agent
     agent -->|"Submits digitized measurements with its restricted token"| tracking
-    tracking -->|"Writes Observation and Provenance under agent authority"| medplum
+    tracking -->|"Writes Observation and Provenance under Bot authority"| medplum
     tracking -->|"Returns known outcomes and source status"| agent
     agent -->|"Reports import status"| app
 ```
 
-The diagram is an online logical container view. It does not decide whether the agent process runs on a phone or elsewhere, and it does not add a local sync store to the initial MVP.
+The diagram is an online logical container view. The Bot runs server-side in the Medplum Bot runtime; the Flutter app
+remains responsible for obtaining platform permission and supplying permitted source changes. The initial MVP adds no
+local sync store.
 
-## C3 — Digitization Agent responsibilities
+## C3 — Digitization Bot responsibilities
 
 ```mermaid
 flowchart LR
     app["Flutter App<br/>External Container<br/>Permitted source changes"]
     tracking["Health Tracking Service<br/>External Container<br/>Recording and source status"]
 
-    subgraph agent["Digitization Agent"]
+    subgraph agent["Medplum Digitization Bot"]
         admission["Source Admission<br/>Component<br/>Requires Alice attribution and permitted type"]
         decision["Import Decision<br/>Component<br/>Distinguishes new, unchanged, and absent source"]
-        submission["Restricted Submission<br/>Component<br/>Uses current agent grant and token"]
+        submission["Restricted Submission<br/>Component<br/>Uses current Bot grant and service token"]
     end
 
     app -->|"Supplies permitted source changes"| admission
     admission -->|"Passes attributed records"| decision
     decision -->|"Requests new record or absent-source update"| submission
-    submission -->|"Submits under agent authority"| tracking
+    submission -->|"Submits under Bot authority"| tracking
 ```
 
 These are decision responsibilities, not required files, classes, or independent services.
@@ -132,17 +135,17 @@ sequenceDiagram
     participant Alice
     participant Source as Mobile Health Source
     participant App as Flutter App
-    participant Agent as Digitization Agent
+    participant Agent as Medplum Digitization Bot
     participant Tracking as Health Tracking
     participant Medplum
 
     Alice->>App: Grant source permission
     App->>Source: Read permitted steps and sleep
     Source-->>App: Alice-attributed source changes
-    App->>Agent: Supply changes under separate agent grant
+    App->>Agent: Supply changes under separate Bot grant
     alt New structured source record
         Agent->>Tracking: Request automatic measurement record
-        Tracking->>Medplum: Commit FHIR measurement under agent authority
+        Tracking->>Medplum: Commit FHIR measurement under Bot authority
         Medplum-->>Tracking: Known or uncertain outcome
         Tracking-->>Agent: Report outcome
     else Source record deleted
@@ -157,14 +160,14 @@ An unchanged record creates no new logical measurement. Source deletion does not
 ## Medplum and permission boundary
 
 - Medplum stores committed measurements as `Observation` with source and recorder provenance; stable source identity prevents duplicate logical import. The exact source-absence FHIR representation remains a design choice.
-- Platform permission allows the app to read a type; the separate agent grant and Medplum policy allow the agent to submit for Alice. Neither permission implies the other.
-- A confirmed Medplum refusal after agent revocation is not retried as an authorized write. An uncertain commit is reconciled rather than reported as recorded.
+- Platform permission allows the app to read a type; the separate Bot grant and Medplum policy allow the Bot to submit for Alice. Neither permission implies the other.
+- A confirmed Medplum refusal after Bot revocation is not retried as an authorized write. An uncertain commit is reconciled rather than reported as recorded.
 - Alice's source attribution is explicit. A shared-device record is not silently assigned to Charlie.
 
 ## Open design points
 
 - How a later source correction affects an imported value is still an EventStorming hot spot; no automatic-correction design input is allocated.
 - The FHIR representation and verification of `Source Marked Absent` must be selected before implementation review.
-- The agent's execution location and credential lifecycle are not decided by this SDD.
+- The Bot runs in the Medplum Bot runtime; its service-credential lifecycle remains open.
 
 No verification evidence, control effectiveness, or residual-risk decision is claimed.

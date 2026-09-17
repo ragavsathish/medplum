@@ -15,7 +15,7 @@ import type { CreateMinorProfileRequest } from '../../../../src/contexts/account
 import { createAccountsHttpApp } from '../../../../src/contexts/accounts/infra/http/accountsHttpApp';
 import { createKeycloakAccountIdentityProvider } from '../../../../src/contexts/accounts/infra/keycloak/keycloakAccountIdentityProvider';
 import { createMedplumAccountsProvisioner } from '../../../../src/contexts/accounts/infra/medplum/medplumAccountsProvisioner';
-import { createInMemoryAccountsRepository } from '../../../../src/contexts/accounts/infra/memory/inMemoryAccountsRepository';
+import { createMedplumAccountsState } from '../../../../src/contexts/accounts/infra/medplum/medplumAccountsState';
 
 const DEFAULT_MEDPLUM_BASE_URL = 'http://localhost:8103/';
 const DEFAULT_KEYCLOAK_BASE_URL = 'http://localhost:8180/';
@@ -44,13 +44,13 @@ export type ObservationSubmission = AccountApiResponse & {
   readonly observationId?: string;
 };
 
-export type AccountDockerFixtureOptions = {
+export type AccountAcceptanceFixtureOptions = {
   readonly projectDisplay?: string;
   readonly medplumBaseUrl?: string;
   readonly keycloakBaseUrl?: string;
 };
 
-export type AccountDockerFixture = {
+export type AccountAcceptanceFixture = {
   /** Stable W3C trace ID attached to every request issued by this scenario. */
   readonly correlationTraceId: string;
   readonly medplumBaseUrl: string;
@@ -77,40 +77,44 @@ export type AccountDockerFixture = {
   observationWasPersisted(identifier: Identifier): Promise<boolean>;
   readAlicePolicy(): Promise<AccessPolicy>;
   readDigitizerPolicy(): Promise<AccessPolicy>;
-  /** Restarts only the Account HTTP adapter; domain state and all Docker resources are retained. */
+  /** Restarts only the Account HTTP adapter; domain state and all acceptance resources are retained. */
   restartWithProvisionerAccessToken(accessToken: string): Promise<void>;
+  restartWithProvisionerPolicyIds(policyIds: {
+    readonly ownerPolicyId: string;
+    readonly agentPolicyId: string;
+  }): Promise<void>;
   track(resource: { readonly resourceType: ResourceType; readonly id: string }): void;
   cleanup(): Promise<void>;
 };
 
 /**
- * Creates one isolated Docker acceptance environment.
+ * Creates one isolated full-stack acceptance environment.
  *
  * Every invocation owns a unique Medplum project, policies, users, resources, and
  * ephemeral HTTP server. The shared Keycloak Alice is used read-only; its subject
  * is resolved through the fixture's project-scoped Medplum administrator token.
  *
- * @param options - Optional Docker endpoints and project display prefix.
+ * @param options - Optional service endpoints and project display prefix.
  * @returns A fixture whose resources and Account server are isolated to this invocation.
  */
-export async function createAccountDockerFixture(
-  options: AccountDockerFixtureOptions = {}
-): Promise<AccountDockerFixture> {
+export async function createAccountAcceptanceFixture(
+  options: AccountAcceptanceFixtureOptions = {}
+): Promise<AccountAcceptanceFixture> {
   const medplumBaseUrl = options.medplumBaseUrl ?? process.env['MEDPLUM_BASE_URL'] ?? DEFAULT_MEDPLUM_BASE_URL;
   const keycloakBaseUrl = options.keycloakBaseUrl ?? process.env['KEYCLOAK_BASE_URL'] ?? DEFAULT_KEYCLOAK_BASE_URL;
   const createdResources = new Map<string, { readonly resourceType: ResourceType; readonly id: string }>();
-  const projectDisplay = `${options.projectDisplay ?? 'Accounts Docker Acceptance'} ${randomUUID()}`;
+  const projectDisplay = `${options.projectDisplay ?? 'Accounts Acceptance'} ${randomUUID()}`;
   const correlationTraceId = randomUUID().replaceAll('-', '');
   await allure.label('traceId', correlationTraceId);
-  process.stdout.write(`Account Docker scenario ${projectDisplay} traceId=${correlationTraceId}\n`);
+  process.stdout.write(`Account acceptance scenario ${projectDisplay} traceId=${correlationTraceId}\n`);
   let cleanedUp = false;
 
-  const track: AccountDockerFixture['track'] = (resource) => {
+  const track: AccountAcceptanceFixture['track'] = (resource) => {
     createdResources.set(`${resource.resourceType}/${resource.id}`, resource);
   };
 
   const admin = await withAdminProjectCreationLock(medplumBaseUrl, () =>
-    loginToDockerMedplum(
+    loginToMedplum(
       medplumBaseUrl,
       {
         email: process.env['MEDPLUM_ACCEPTANCE_EMAIL'] ?? 'admin@example.com',
@@ -123,7 +127,7 @@ export async function createAccountDockerFixture(
   await admin.getProfileAsync();
   const project = admin.getProject();
   if (!project?.id) {
-    throw new Error('Docker Medplum session has no project');
+    throw new Error('full-stack Medplum session has no project');
   }
   track({ resourceType: 'Project', id: project.id });
 
@@ -155,7 +159,7 @@ export async function createAccountDockerFixture(
   const alicePatientId = referenceId(aliceMembership.profile?.reference);
   const aliceAccountId = referenceId(aliceMembership.user?.reference);
   const digitizerAccountId = referenceId(digitizerMembership.user?.reference);
-  const keycloakAuthentication = await loginToDockerKeycloak(keycloakBaseUrl, correlationTraceId);
+  const keycloakAuthentication = await loginToKeycloak(keycloakBaseUrl, correlationTraceId);
 
   const alicePatient = await admin.readResource('Patient', alicePatientId);
   await admin.updateResource({
@@ -172,7 +176,7 @@ export async function createAccountDockerFixture(
     ...alicePolicy,
     resource: memberRules(alicePatientId, false),
   });
-  const alice = await loginToDockerMedplum(
+  const alice = await loginToMedplum(
     medplumBaseUrl,
     {
       email: aliceCredentials.email,
@@ -182,7 +186,7 @@ export async function createAccountDockerFixture(
     },
     correlationTraceId
   );
-  const digitizer = await loginToDockerMedplum(
+  const digitizer = await loginToMedplum(
     medplumBaseUrl,
     {
       email: digitizerCredentials.email,
@@ -193,7 +197,13 @@ export async function createAccountDockerFixture(
     correlationTraceId
   );
 
-  const accountsRepository = createInMemoryAccountsRepository();
+  const accountsRepository = createMedplumAccountsState({
+    baseUrl: medplumBaseUrl,
+    accessToken: requiredToken(admin),
+    accountIdentifierSystem: KEYCLOAK_PATIENT_IDENTIFIER_SYSTEM,
+    ownerPolicyIdByAccountId: new Map([[keycloakAuthentication.subject, alicePolicy.id]]),
+    agentPolicyIdByAgentId: new Map([[digitizerAccountId, digitizerPolicy.id]]),
+  });
   const identityProvider = createKeycloakAccountIdentityProvider({
     keycloakBaseUrl,
     realm: KEYCLOAK_REALM,
@@ -203,12 +213,18 @@ export async function createAccountDockerFixture(
   });
   let listening = await startAccountServer(requiredToken(admin));
 
-  async function startAccountServer(provisionerAccessToken: string): Promise<ListeningServer> {
+  async function startAccountServer(
+    provisionerAccessToken: string,
+    policyIds: { readonly ownerPolicyId: string; readonly agentPolicyId: string } = {
+      ownerPolicyId: alicePolicy.id,
+      agentPolicyId: digitizerPolicy.id,
+    }
+  ): Promise<ListeningServer> {
     const provisioner = createMedplumAccountsProvisioner({
       baseUrl: medplumBaseUrl,
       accessToken: provisionerAccessToken,
-      ownerPolicyIdByAccountId: new Map([[keycloakAuthentication.subject, alicePolicy.id]]),
-      agentPolicyIdByAgentId: new Map([[digitizerAccountId, digitizerPolicy.id]]),
+      ownerPolicyIdByAccountId: new Map([[keycloakAuthentication.subject, policyIds.ownerPolicyId]]),
+      agentPolicyIdByAgentId: new Map([[digitizerAccountId, policyIds.agentPolicyId]]),
       onError: (error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`),
     });
     return listen(
@@ -216,7 +232,10 @@ export async function createAccountDockerFixture(
     );
   }
 
-  const postAsAlice: AccountDockerFixture['postAsAlice'] = async <TBody = unknown>(path: string, body?: unknown) => {
+  const postAsAlice: AccountAcceptanceFixture['postAsAlice'] = async <TBody = unknown>(
+    path: string,
+    body?: unknown
+  ) => {
     const response = await fetch(new URL(path, listening.url), {
       method: 'POST',
       headers: {
@@ -229,7 +248,7 @@ export async function createAccountDockerFixture(
     return { status: response.status, body: (await response.json()) as TBody };
   };
 
-  const createMinorProfile: AccountDockerFixture['createMinorProfile'] = async (input) => {
+  const createMinorProfile: AccountAcceptanceFixture['createMinorProfile'] = async (input) => {
     const response = await postAsAlice('accounts/minor-profiles', {
       id: input?.id ?? randomUUID(),
       identifier: input?.identifier ?? {
@@ -330,6 +349,10 @@ export async function createAccountDockerFixture(
       await closeServer(listening.server);
       listening = await startAccountServer(accessToken);
     },
+    async restartWithProvisionerPolicyIds(policyIds): Promise<void> {
+      await closeServer(listening.server);
+      listening = await startAccountServer(requiredToken(admin), policyIds);
+    },
     track,
     async cleanup(): Promise<void> {
       if (cleanedUp) {
@@ -364,7 +387,7 @@ async function inviteUser(
   policy: AccessPolicy,
   firstName: string,
   lastName: string,
-  track: AccountDockerFixture['track']
+  track: AccountAcceptanceFixture['track']
 ): Promise<{ readonly membership: ProjectMembership; readonly email: string; readonly password: string }> {
   const email = `accounts-${randomUUID()}@example.com`;
   const password = `Acceptance-${randomUUID()}`;
@@ -386,7 +409,7 @@ async function inviteUser(
   return { membership, email, password };
 }
 
-async function loginToDockerKeycloak(
+async function loginToKeycloak(
   keycloakBaseUrl: string,
   traceId: string
 ): Promise<{ readonly accessToken: string; readonly subject: string }> {
@@ -453,7 +476,7 @@ export function requiredToken(client: MedplumClient): string {
   return token;
 }
 
-async function loginToDockerMedplum(
+async function loginToMedplum(
   medplumBaseUrl: string,
   credentials: {
     readonly email: string;
@@ -493,7 +516,7 @@ async function loginToDockerMedplum(
       );
     } else {
       if (!membership?.id) {
-        throw new Error('Docker Medplum login returned no selectable membership');
+        throw new Error('full-stack Medplum login returned no selectable membership');
       }
       login = await withLoginRateLimitRetry(() =>
         loginClient.post<LoginAuthenticationResponse>(
@@ -506,7 +529,7 @@ async function loginToDockerMedplum(
     }
   }
   if (!login.code) {
-    throw new Error('Docker Medplum login returned no authorization code');
+    throw new Error('full-stack Medplum login returned no authorization code');
   }
   const tokenResponse = await fetch(new URL('oauth2/token', medplumBaseUrl), {
     method: 'POST',
@@ -519,7 +542,7 @@ async function loginToDockerMedplum(
   });
   const tokens = (await tokenResponse.json()) as { access_token?: string };
   if (!tokens.access_token) {
-    throw new Error(`Docker Medplum token exchange failed with HTTP ${tokenResponse.status}`);
+    throw new Error(`full-stack Medplum token exchange failed with HTTP ${tokenResponse.status}`);
   }
   return new MedplumClient({ baseUrl: medplumBaseUrl, accessToken: tokens.access_token });
 }

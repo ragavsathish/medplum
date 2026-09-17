@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
 import type { AccountsProvisioner } from '../../../src/contexts/accounts/infra/http/accountsHttpApp';
 import { createAccountsHttpApp } from '../../../src/contexts/accounts/infra/http/accountsHttpApp';
-import { createInMemoryAccountsRepository } from '../../../src/contexts/accounts/infra/memory/inMemoryAccountsRepository';
+import { createInMemoryAccountsRepository } from './support/inMemoryAccountsRepository';
 
 const medplumBaseUrl = 'http://medplum.test/';
 const openServers: Server[] = [];
@@ -33,7 +33,9 @@ afterAll(() => medplum.close());
 
 describe('Accounts HTTP API — onboarding', () => {
   test('publishes the Accounts command contract', async () => {
-    const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl })));
+    const appServer = await listen(
+      createServer(createAccountsHttpApp({ medplumBaseUrl, accountsRepository: createInMemoryAccountsRepository() }))
+    );
     const response = await fetch(`${appServer.url}accounts/openapi.json`);
     const body = (await response.json()) as {
       paths?: Record<string, any>;
@@ -140,7 +142,11 @@ describe('Accounts HTTP API — onboarding', () => {
         return { ok: true };
       },
     };
-    const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+    const appServer = await listen(
+      createServer(
+        createAccountsHttpApp({ medplumBaseUrl, provisioner, accountsRepository: createInMemoryAccountsRepository() })
+      )
+    );
 
     const result = await postJson(`${appServer.url}accounts/minor-profiles`, {});
 
@@ -157,7 +163,11 @@ describe('Accounts HTTP API — onboarding', () => {
         return { ok: true };
       },
     };
-    const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+    const appServer = await listen(
+      createServer(
+        createAccountsHttpApp({ medplumBaseUrl, provisioner, accountsRepository: createInMemoryAccountsRepository() })
+      )
+    );
     await postJson(`${appServer.url}accounts/onboard`, undefined);
 
     const result = await postJson(`${appServer.url}accounts/minor-profiles`, {
@@ -211,7 +221,14 @@ describe('Accounts HTTP API — onboarding', () => {
       },
     };
     const appServer = await listen(
-      createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner, identityProvider }))
+      createServer(
+        createAccountsHttpApp({
+          medplumBaseUrl,
+          provisioner,
+          identityProvider,
+          accountsRepository: createInMemoryAccountsRepository(),
+        })
+      )
     );
     await postJson(`${appServer.url}accounts/onboard`, undefined, traceId);
 
@@ -242,7 +259,11 @@ describe('Accounts HTTP API — onboarding', () => {
         return { ok: false, reason: 'IDENTIFIER_COLLISION' };
       },
     };
-    const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+    const appServer = await listen(
+      createServer(
+        createAccountsHttpApp({ medplumBaseUrl, provisioner, accountsRepository: createInMemoryAccountsRepository() })
+      )
+    );
     await postJson(`${appServer.url}accounts/onboard`, undefined);
 
     const result = await postJson(`${appServer.url}accounts/minor-profiles`, {
@@ -271,7 +292,11 @@ describe('Accounts HTTP API — onboarding', () => {
         return { ok: true };
       },
     };
-    const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+    const appServer = await listen(
+      createServer(
+        createAccountsHttpApp({ medplumBaseUrl, provisioner, accountsRepository: createInMemoryAccountsRepository() })
+      )
+    );
     await postJson(`${appServer.url}accounts/onboard`, undefined);
 
     const result = await postJson(`${appServer.url}accounts/minor-profiles`, {
@@ -299,7 +324,11 @@ describe('Accounts HTTP API — onboarding', () => {
         return { ok: true };
       },
     };
-    const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+    const appServer = await listen(
+      createServer(
+        createAccountsHttpApp({ medplumBaseUrl, provisioner, accountsRepository: createInMemoryAccountsRepository() })
+      )
+    );
     await postJson(`${appServer.url}accounts/onboard`, undefined);
     await postJson(`${appServer.url}accounts/minor-profiles`, {
       id: '20000000-0000-4000-8000-000000000002',
@@ -340,7 +369,11 @@ describe('Accounts HTTP API — onboarding', () => {
         return { ok: false, reason: 'UNAVAILABLE' };
       },
     };
-    const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+    const appServer = await listen(
+      createServer(
+        createAccountsHttpApp({ medplumBaseUrl, provisioner, accountsRepository: createInMemoryAccountsRepository() })
+      )
+    );
     await postJson(`${appServer.url}accounts/onboard`, undefined);
     await postJson(`${appServer.url}accounts/minor-profiles`, {
       id: '20000000-0000-4000-8000-000000000002',
@@ -735,7 +768,11 @@ async function traceTo(designInput: string, ...acceptanceCriteria: string[]): Pr
 }
 
 async function createLinkedFamily(provisioner: AccountsProvisioner): Promise<{ url: string }> {
-  const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+  const appServer = await listen(
+    createServer(
+      createAccountsHttpApp({ medplumBaseUrl, provisioner, accountsRepository: createInMemoryAccountsRepository() })
+    )
+  );
   await postJson(`${appServer.url}accounts/onboard`, undefined);
   await postJson(`${appServer.url}accounts/minor-profiles`, {
     id: '20000000-0000-4000-8000-000000000002',
@@ -781,7 +818,9 @@ async function postJson(url: string, body: unknown, traceId?: string): Promise<{
 }
 
 async function postOnboardAccount(): Promise<{ status: number; body: unknown }> {
-  const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl })));
+  const appServer = await listen(
+    createServer(createAccountsHttpApp({ medplumBaseUrl, accountsRepository: createInMemoryAccountsRepository() }))
+  );
   const response = await fetch(`${appServer.url}accounts/onboard`, {
     method: 'POST',
     headers: { authorization: 'Bearer acceptance-token' },

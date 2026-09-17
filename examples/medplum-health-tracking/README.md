@@ -5,7 +5,7 @@
 Run the Accounts acceptance suite and its local Medplum, PostgreSQL, Redis, and Keycloak stack:
 
 ```bash
-npm run test:acceptance:docker
+npm run test:acceptance:stack
 ```
 
 The stack definition is `docker-compose.acceptance.yml`. Generated Allure evidence is written to

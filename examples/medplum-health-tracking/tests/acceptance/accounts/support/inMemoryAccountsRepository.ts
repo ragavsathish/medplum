@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
-import type { AccountsRepository } from '../../application/ports/accountsRepository';
-import type { Account, AgentGrant } from '../../domain/account';
+import type { AccountsRepository } from '../../../src/contexts/accounts/application/ports/accountsRepository';
+import type { Account, AgentGrant } from '../../../src/contexts/accounts/domain/account';
 
 export function createInMemoryAccountsRepository(): AccountsRepository {
   const accounts = new Map<string, Account>();

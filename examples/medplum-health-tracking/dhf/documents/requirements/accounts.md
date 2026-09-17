@@ -32,24 +32,28 @@ The collision message and Medplum admin recovery path remain open; this draft do
 
 ## Delegate digitization
 
-**UN-ACC-003:** As Alice, I need to grant and revoke an agent's digitization access for selected family profiles so it can help with measurements without receiving my broader access.
+**UN-ACC-003:** As Alice, I need to grant and revoke the Digitization Bot's access for selected family profiles so it can digitize measurements without receiving my broader access.
+
+In this requirement, the **digitization agent is the Medplum Bot**. It is a non-human service actor, not a delegated
+person and not Alice acting through another credential.
 
 | ID | Baseline acceptance criterion | Design input |
 |---|---|---|
-| `AC-ACC-007` | Alice can grant digitization for selected profiles; the grant identifies Alice, the agent, the selected profiles, and the permitted task. | `DI-ACC-005` |
-| `AC-ACC-008` | The agent can submit digitized measurements only for currently granted profiles and tasks; Alice's own access remains separate. | `DI-ACC-005` |
-| `AC-ACC-009` | Removing Charlie from the agent grant ends its Charlie access while leaving its Alice access and Alice's own Charlie access unchanged. | `DI-ACC-006` |
-| `AC-ACC-010` | A delayed agent submission for a revoked profile is refused at save time rather than recorded. | `DI-ACC-006` |
+| `AC-ACC-007` | Alice can grant the Digitization Bot access to selected profiles and the `digitize-measurement` task; the grant identifies Alice as grantor, the Bot service identity, the selected profiles, and the permitted task. | `DI-ACC-005` |
+| `AC-ACC-008` | Without an active grant from Alice, the Digitization Bot cannot act for any of her profiles; with an active grant, it can perform only the granted task for the granted profiles. The grant neither impersonates Alice nor changes her own access. | `DI-ACC-005` |
+| `AC-ACC-009` | Removing Charlie from the Bot grant ends its Charlie access while leaving its Alice access and Alice's own Charlie access unchanged. | `DI-ACC-006` |
+| `AC-ACC-010` | A delayed Bot operation for a revoked profile is refused when current permission is checked and does not record or update data for that profile. | `DI-ACC-006` |
 
-Mobile source permission is a separate choice from this grant; the agent need not connect a mobile source to digitize a photo.
+Mobile source permission is a separate choice from this grant. For a photo, the grant permits the Bot to extract a
+candidate; it does not permit the Bot to confirm that candidate as Alice.
 
 ## End the Charlie family link
 
-**UN-ACC-004:** As Alice, I need to end Charlie's family link so neither I nor my agent can continue acting for him through that link.
+**UN-ACC-004:** As Alice, I need to end Charlie's family link so neither I nor the Digitization Bot can continue acting for him through that link.
 
 | ID | Baseline acceptance criterion | Design input |
 |---|---|---|
-| `AC-ACC-011` | Ending the link removes both Alice's and the agent's derivative Charlie access before `Charlie Unlinked from Alice's Family` is reported. | `DI-ACC-007` |
+| `AC-ACC-011` | Ending the link removes both Alice's and the Bot's derivative Charlie access before `Charlie Unlinked from Alice's Family` is reported. | `DI-ACC-007` |
 | `AC-ACC-012` | If either access removal fails, the link remains active and the unlink is reported as failed, not complete. | `DI-ACC-007` |
 
 ## Traceability

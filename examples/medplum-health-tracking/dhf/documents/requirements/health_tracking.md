@@ -6,7 +6,7 @@ context: health-tracking
 
 # Health Tracking — User Needs and Baseline Acceptance Criteria
 
-**Status:** Draft design-review input. See the [EventStorming record](../discovery/EVENT_STORMING.md). Height, weight, steps, and sleep are measurement types, not separate domains. Alice may enter measurements herself or grant a more restricted agent to digitize them.
+**Status:** Draft design-review input. See the [EventStorming record](../discovery/EVENT_STORMING.md). Height, weight, steps, and sleep are measurement types, not separate domains. Alice may enter measurements herself or grant a more restricted Medplum Bot to digitize them. In this document, **digitization agent** and **Digitization Bot** name the same non-human service actor.
 
 ## Record manually
 
@@ -25,20 +25,20 @@ context: health-tracking
 
 | ID | Baseline acceptance criterion | Design input |
 |---|---|---|
-| `AC-HT-005` | The agent presents a candidate value, unit, and selected profile alongside the source photo; no measurement is recorded yet. | `DI-15` |
-| `AC-HT-006` | After Alice confirms the value, unit, and profile, a committed measurement is recorded for that profile with the agent as recorder and Alice as grantor. | `DI-15` |
+| `AC-HT-005` | Only while Alice's grant is active for the selected profile and photo-digitization task, the Digitization Bot can access the source photo and present a candidate value, unit, and selected profile; no measurement is recorded yet. | `DI-15` |
+| `AC-HT-006` | After Alice confirms the value, unit, and profile, a committed measurement is recorded for that profile; provenance distinguishes the Bot as extractor from Alice as confirmer and grantor. | `DI-15` |
 | `AC-HT-007` | If Alice rejects the candidate, no measurement is saved; the original photo remains available to her for another attempt. | `DI-16` |
-| `AC-HT-008` | When the digitization attempt ends, Alice retains restricted photo access and the agent no longer has photo access. | `DI-17` |
+| `AC-HT-008` | When the digitization attempt ends, Alice retains restricted photo access and the Digitization Bot no longer has photo access. | `DI-17` |
 
 The photo retention duration and exact temporary-access design remain open. The AC state the intended behavior, not a claim that Medplum's Binary policy already enforces it.
 
 ## Import attributed mobile measurements
 
-**UN-HT-003:** As Alice, I need my permitted mobile steps and sleep digitized automatically by my limited agent so those measurements appear in my wellness record without reviewing each structured item.
+**UN-HT-003:** As Alice, I need my permitted mobile steps and sleep digitized automatically by the limited Digitization Bot so those measurements appear in my wellness record without reviewing each structured item.
 
 | ID | Baseline acceptance criterion | Design input |
 |---|---|---|
-| `AC-HT-009` | Mobile source permission is granted separately from agent access; import runs only while both are active for the permitted record type. | `DI-13` |
+| `AC-HT-009` | Mobile source permission is granted separately from Digitization Bot access; import runs only while both are active for the permitted record type. | `DI-13` |
 | `AC-HT-010` | A new Alice-attributed step record is saved automatically with its count and observed period. | `DI-4`, `DI-6` |
 | `AC-HT-011` | A new Alice-attributed sleep session is saved automatically with its start, end, and total duration. | `DI-5`, `DI-7` |
 | `AC-HT-012` | Data from a shared device is not assigned to Charlie without a source explicitly attributed to him; this MVP imports mobile steps and sleep for Alice only. | `DI-18` |
@@ -63,7 +63,7 @@ How a later mobile-source correction changes an imported value is open. Sleep st
 | User need | EventStorming outcome | AC | Design description |
 |---|---|---|---|
 | `UN-HT-001` | Measurement Recorded / Rejected / Unconfirmed | `AC-HT-001`–`004` | [Health Tracking SDD](../design/health_tracking.md) |
-| `UN-HT-002` | Candidate Extracted / Rejected; Measurement Recorded; Agent Photo Access Ended | `AC-HT-005`–`008` | [Health Tracking SDD](../design/health_tracking.md) |
+| `UN-HT-002` | Candidate Extracted / Rejected; Measurement Recorded; Bot Photo Access Ended | `AC-HT-005`–`008` | [Health Tracking SDD](../design/health_tracking.md) |
 | `UN-HT-003` | Mobile Source Connected; Measurement Recorded; Source Marked Absent | `AC-HT-009`–`015` | [Mobile Import SDD](../design/mobile_health_sync.md) |
 | `UN-HT-004` | Measurement Corrected / Retracted | `AC-HT-016`–`018` | [Health Tracking SDD](../design/health_tracking.md) |
 

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
-import type { AccessPolicy, AccessPolicyResource, Bundle, Patient } from '@medplum/fhirtypes';
+import type { AccessPolicy, AccessPolicyResource, Bundle, Patient, RelatedPerson } from '@medplum/fhirtypes';
 import { randomUUID } from 'node:crypto';
 import type { AccountRequestContext } from '../../application/ports/accountRequestContext';
 import type { AccountsProvisioner } from '../../application/ports/accountsProvisioner';
@@ -41,9 +41,11 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
             },
           ],
         });
-        return created.created
-          ? ({ ok: true, memberId: created.patient.id } as const)
-          : ({ ok: false, reason: 'IDENTIFIER_COLLISION' } as const);
+        if (!created.created) {
+          return { ok: false, reason: 'IDENTIFIER_COLLISION' } as const;
+        }
+        await createRelatedPerson(options, context, command, created.patient);
+        return { ok: true, memberId: created.patient.id } as const;
       } catch (error) {
         options.onError?.(error);
         return { ok: false, reason: 'UNAVAILABLE' } as const;
@@ -106,6 +108,31 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
       }
     },
   };
+}
+
+async function createRelatedPerson(
+  options: MedplumAccountsProvisionerOptions,
+  context: AccountRequestContext | undefined,
+  command: CreateMinorProfileCommand,
+  patient: Patient
+): Promise<void> {
+  const response = await fetch(new URL('fhir/R4/RelatedPerson', options.baseUrl), {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${options.accessToken}`,
+      'content-type': 'application/fhir+json',
+      ...correlationHeaders(context?.correlationTraceId),
+    },
+    body: JSON.stringify({
+      resourceType: 'RelatedPerson',
+      patient: { reference: `Patient/${patient.id}` },
+      identifier: [{ system: 'https://family.example/identity/keycloak-sub', value: command.accountId }],
+      relationship: [{ coding: [{ system: 'https://family.example/fhir/CodeSystem/self-reported-family-relationship', code: command.relationship }] }],
+    } satisfies RelatedPerson),
+  });
+  if (!response.ok) {
+    throw new Error(`Medplum RelatedPerson create failed with HTTP ${response.status}: ${await response.text()}`);
+  }
 }
 
 async function conditionalCreatePatient(

@@ -30,8 +30,11 @@ design_inputs:
     traces_to: [UN-HT-001]
   - id: DI-15
     text: >-
-      Health Tracking shall present a photo-derived candidate value, unit, and
-      profile to Alice and shall commit no measurement until Alice confirms them.
+      Health Tracking shall permit the Medplum Bot to access a source photo and
+      present its photo-derived candidate only while Alice's grant is active for
+      the selected profile and photo-digitization task, shall commit no
+      measurement until Alice confirms the candidate, and shall distinguish Bot
+      extraction from Alice's confirmation in provenance.
     traces_to: [UN-HT-002]
   - id: DI-16
     text: >-
@@ -41,8 +44,8 @@ design_inputs:
     traces_to: [UN-HT-002]
   - id: DI-17
     text: >-
-      Health Tracking shall end the agent's access to a source photo when its
-      digitization attempt ends while preserving Alice's restricted access.
+      Health Tracking shall end the Digitization Bot's access to a source photo
+      when its digitization attempt ends while preserving Alice's restricted access.
     traces_to: [UN-HT-002]
   - id: DI-20
     text: >-
@@ -63,7 +66,7 @@ design_inputs:
 
 ## Purpose and scope
 
-This SDD allocates [manual recording, photo digitization, and correction needs](../requirements/health_tracking.md) to one Health Tracking context. A measurement has one member subject; Alice or her restricted agent is a separate recorder. Photo extraction proposes a candidate, not a saved measurement. Mobile steps and sleep are covered in the [Mobile Import SDD](./mobile_health_sync.md).
+This SDD allocates [manual recording, photo digitization, and correction needs](../requirements/health_tracking.md) to one Health Tracking context. The digitization agent is a Medplum Bot service actor. A measurement has one member subject; photo extraction proposes a candidate rather than a saved measurement, and Alice confirms the candidate before commit. Mobile steps and sleep are covered in the [Mobile Import SDD](./mobile_health_sync.md).
 
 Medplum is the external FHIR repository and execution-time authorization point. The OpenAPI entities own payload shapes; this SDD does not repeat them. It describes required behavior and responsibility boundaries, not file layout or command-handler coding conventions.
 
@@ -84,16 +87,16 @@ These are baseline design inputs, not evaluated risk controls.
 
 ```mermaid
 flowchart LR
-    caller["Alice or Limited Agent<br/>Actor via external app"]
+    caller["Alice or Digitization Bot<br/>Authenticated actor"]
     medplum["Medplum<br/>External Software System<br/>FHIR storage, history, and access enforcement"]
-    accounts["Accounts Service<br/>External Container<br/>Family and agent grants"]
+    accounts["Accounts Service<br/>External Container<br/>Family and Bot grants"]
 
     subgraph tracking["Health Tracking Service — Container"]
         entry["Measurement Entry<br/>Component<br/>Receives actor-scoped commands and returns outcomes"]
         decision["Measurement Decision<br/>Component<br/>Protects fixed subject and measurement validity"]
         photo["Photo Review<br/>Component<br/>Keeps candidate separate until Alice confirms"]
         correction["Correction Decision<br/>Component<br/>Corrects or retracts without subject transfer"]
-        evidence["Photo Access Boundary<br/>Component<br/>Ends agent access after attempt"]
+        evidence["Photo Access Boundary<br/>Component<br/>Ends Bot access after attempt"]
         fhir["Medplum Gateway<br/>Component<br/>Commits Observation and Provenance"]
     end
 
@@ -117,7 +120,7 @@ The arrows from Accounts carry grant facts, not a cached authorization decision.
 ```mermaid
 sequenceDiagram
     participant Alice
-    participant Agent as Limited Agent
+    participant Agent as Medplum Digitization Bot
     participant Tracking as Health Tracking
     participant Medplum
 
@@ -141,15 +144,16 @@ The original photo remains restricted evidence for Alice in either review outcom
 
 ## Medplum and authorization boundary
 
-- Health Tracking maps a committed measurement to a FHIR `Observation` and recorder/grantor provenance to `Provenance`. Medplum preserves resource history for corrections.
-- Measurement writes use the current Alice- or agent-scoped authority. There is no broad service account in the measurement write path; Medplum permission is checked on each attempted save.
-- Agent grant facts do not confer FHIR permission by themselves. A confirmed `403` after grant revocation refuses the save; an uncertain commit remains unconfirmed until reconciled.
+- Health Tracking maps a committed measurement to a FHIR `Observation`; `Provenance` distinguishes Bot extraction from Alice's confirmation and grant. Medplum preserves resource history for corrections.
+- Health Tracking does not invoke or accept photo-digitization work from the Bot without Alice's active grant for the selected profile and task.
+- Photo-derived measurement writes use Alice's current authority after her confirmation. Automatic mobile imports use the Bot's current scoped authority. There is no broad service account in either measurement write path.
+- Bot grant facts do not confer FHIR permission by themselves. A confirmed permission refusal after grant revocation refuses the operation; an uncertain commit remains unconfirmed until reconciled.
 - [Medplum's Binary policy matcher](../../../../../packages/core/src/access.ts) does not apply per-photo criteria. Exact-photo temporary access may require an application-mediated boundary; its mechanism and direct Binary/presigned-URL tests remain open. `DI-17` states the desired result, not a verified mechanism.
 
 ## Open design points
 
 - The retained-photo deletion period is not yet selected.
-- The photo access boundary must be chosen and tested before claiming that the agent cannot read a retained photo after attempt closure.
+- The photo access boundary must be chosen and tested before claiming that the Bot cannot read a retained photo after attempt closure.
 - The profile-selection API contract and existing measurement implementation must be reconciled; OpenAPI owns the final shape.
 
 No verification evidence, control effectiveness, or residual-risk decision is claimed.

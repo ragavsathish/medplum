@@ -28,7 +28,7 @@ Inside Pi:
 
 ```bash
 cd examples/medplum-health-tracking
-npm run test:acceptance:docker
+npm run test:acceptance:stack
 ```
 
 This command starts the Health Tracking acceptance stack from
