@@ -12,16 +12,11 @@
     "build:docs": "turbo run build --filter=@medplum/docs",
     "build:fast": "turbo run build --filter=@medplum/app --filter=@medplum/server",
     "clean": "turbo run clean",
-    "env:health:image": "npm --prefix tools/gondolin run image",
-    "env:health:install": "npm --prefix tools/gondolin ci",
-    "env:health:warm": "npm --prefix tools/gondolin run warm",
-    "env:health:vm": "npm --prefix tools/gondolin run vm",
     "lint": "turbo run lint --filter=!@medplum/docs",
     "lint:fix": "turbo run lint:fix --filter=!@medplum/docs",
     "prettier": "prettier --write \"**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,json}\"",
     "sort-package-json": "sort-package-json package.json \"packages/*/package.json\" \"examples/*/package.json\"",
-    "test": "turbo run test --filter=!@medplum/docs",
-    "test:acceptance:accounts:docker": "cross-env MEDPLUM_DOCKER_ACCEPTANCE=1 vitest run --config tests/acceptance/vitest.config.mts --maxWorkers=2 --maxConcurrency=2 tests/acceptance/accounts/accounts.docker.ac-001-006.api.test.ts tests/acceptance/accounts/accounts.docker.ac-007-012.api.test.ts"
+    "test": "turbo run test --filter=!@medplum/docs"
   },
   "prettier": {
     "plugins": [

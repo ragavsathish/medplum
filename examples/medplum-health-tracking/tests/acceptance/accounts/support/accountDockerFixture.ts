@@ -11,11 +11,11 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { CreateMinorProfileRequest } from '../../../../examples/medplum-health-tracking/src/contexts/accounts/application/contracts/accountsApi';
-import { createAccountsHttpApp } from '../../../../examples/medplum-health-tracking/src/contexts/accounts/infra/http/accountsHttpApp';
-import { createKeycloakAccountIdentityProvider } from '../../../../examples/medplum-health-tracking/src/contexts/accounts/infra/keycloak/keycloakAccountIdentityProvider';
-import { createMedplumAccountsProvisioner } from '../../../../examples/medplum-health-tracking/src/contexts/accounts/infra/medplum/medplumAccountsProvisioner';
-import { createInMemoryAccountsRepository } from '../../../../examples/medplum-health-tracking/src/contexts/accounts/infra/memory/inMemoryAccountsRepository';
+import type { CreateMinorProfileRequest } from '../../../../src/contexts/accounts/application/contracts/accountsApi';
+import { createAccountsHttpApp } from '../../../../src/contexts/accounts/infra/http/accountsHttpApp';
+import { createKeycloakAccountIdentityProvider } from '../../../../src/contexts/accounts/infra/keycloak/keycloakAccountIdentityProvider';
+import { createMedplumAccountsProvisioner } from '../../../../src/contexts/accounts/infra/medplum/medplumAccountsProvisioner';
+import { createInMemoryAccountsRepository } from '../../../../src/contexts/accounts/infra/memory/inMemoryAccountsRepository';
 
 const DEFAULT_MEDPLUM_BASE_URL = 'http://localhost:8103/';
 const DEFAULT_KEYCLOAK_BASE_URL = 'http://localhost:8180/';

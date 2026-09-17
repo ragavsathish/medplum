@@ -1,3 +1,5 @@
+name: medplum-health-tracking-acceptance
+
 services:
   postgres:
     image: postgres:16
@@ -42,11 +44,13 @@ services:
     image: quay.io/keycloak/keycloak:26.7.3
     restart: unless-stopped
     command: ['start-dev', '--import-realm']
+    # The acceptance VM maps the workspace with an unprivileged host UID.
+    user: '0'
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
     volumes:
-      - ./examples/medplum-health-tracking/docker/keycloak:/opt/keycloak/data/import:ro
+      - ./docker/keycloak:/opt/keycloak/data/import:ro
     ports:
       - '8180:8080'
 

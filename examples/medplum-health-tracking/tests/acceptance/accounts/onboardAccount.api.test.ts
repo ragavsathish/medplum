@@ -7,9 +7,9 @@ import type { Server } from 'node:http';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
-import type { AccountsProvisioner } from '../../../examples/medplum-health-tracking/src/contexts/accounts/infra/http/accountsHttpApp';
-import { createAccountsHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/accounts/infra/http/accountsHttpApp';
-import { createInMemoryAccountsRepository } from '../../../examples/medplum-health-tracking/src/contexts/accounts/infra/memory/inMemoryAccountsRepository';
+import type { AccountsProvisioner } from '../../../src/contexts/accounts/infra/http/accountsHttpApp';
+import { createAccountsHttpApp } from '../../../src/contexts/accounts/infra/http/accountsHttpApp';
+import { createInMemoryAccountsRepository } from '../../../src/contexts/accounts/infra/memory/inMemoryAccountsRepository';
 
 const medplumBaseUrl = 'http://medplum.test/';
 const openServers: Server[] = [];
