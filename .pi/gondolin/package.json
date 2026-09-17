@@ -4,8 +4,7 @@
   "type": "module",
   "scripts": {
     "image": "sh ./build-image.sh",
-    "warm": "node ./warm-checkpoint.mjs",
-    "vm": "node ./run-vm.mjs"
+    "warm": "node ./warm-checkpoint.mjs"
   },
   "dependencies": {
     "@earendil-works/gondolin": "0.12.0"

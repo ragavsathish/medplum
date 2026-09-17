@@ -75,6 +75,9 @@ export function createVmOptions() {
       "dl-cdn.alpinelinux.org",
       "quay.io",
       "registry.npmjs.org",
+      "raw.githubusercontent.com",
+      "packages.fhir.org",
+      "packages2.fhir.org",
     ],
   });
   const hasKeycloakRealm = fs.existsSync(keycloakRealmPath);
