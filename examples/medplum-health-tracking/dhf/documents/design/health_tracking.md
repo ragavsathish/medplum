@@ -144,7 +144,7 @@ The original photo remains restricted evidence for Alice in either review outcom
 - Health Tracking maps a committed measurement to a FHIR `Observation` and recorder/grantor provenance to `Provenance`. Medplum preserves resource history for corrections.
 - Measurement writes use the current Alice- or agent-scoped authority. There is no broad service account in the measurement write path; Medplum permission is checked on each attempted save.
 - Agent grant facts do not confer FHIR permission by themselves. A confirmed `403` after grant revocation refuses the save; an uncertain commit remains unconfirmed until reconciled.
-- [Medplum's Binary policy matcher](../../../packages/core/src/access.ts) does not apply per-photo criteria. Exact-photo temporary access may require an application-mediated boundary; its mechanism and direct Binary/presigned-URL tests remain open. `DI-17` states the desired result, not a verified mechanism.
+- [Medplum's Binary policy matcher](../../../../../packages/core/src/access.ts) does not apply per-photo criteria. Exact-photo temporary access may require an application-mediated boundary; its mechanism and direct Binary/presigned-URL tests remain open. `DI-17` states the desired result, not a verified mechanism.
 
 ## Open design points
 

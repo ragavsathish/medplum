@@ -18,7 +18,7 @@ RDM references: [[62304:8.1.2.a]] [[62304:8.1.2.b]] [[62304:8.1.2.c]]
 | Item | Current evidence | Open evidence |
 |---|---|---|
 | Source reviewed | Commit `771a512d24b31948fcfc78dacdd6fbe36b72e416`; server and core version `5.1.37` | Correspondence to the deployed artifacts and local modifications |
-| Deployment | [Compose](../../../docker-compose.full-stack.yml#L43) uses `medplum/medplum-server:latest` and `medplum/medplum-app:latest` | Immutable image digests, effective configuration, and Cloud versus self-hosted decision |
+| Deployment | [Compose](../../../docker-compose.acceptance.yml#L43) uses `medplum/medplum-server:latest` and `medplum/medplum-app:latest` | Immutable image digests, effective configuration, and Cloud versus self-hosted decision |
 | Supporting software | PostgreSQL 16, Redis 7, package lock, and Binary storage are present in the reviewed source/configuration | Deployed runtime, operating-system packages, SBOM, backup, and storage configuration |
 | Supplier | Orangebot, Inc. and Medplum contributors | Applicable support agreement, owner, response commitments, and end-of-life date |
 
@@ -36,8 +36,8 @@ Requirements and design are in [Accounts](../requirements/accounts.md), [Health 
 ## Maintenance and support facts
 
 - Medplum publishes [releases](https://github.com/medplum/medplum/releases), [issues](https://github.com/medplum/medplum/issues), and [security advisories](https://github.com/medplum/medplum/security).
-- Its [version policy](../../../packages/docs/docs/compliance/versions.md) describes lockstep component versions, weekly patches, sequential minor upgrades, one active year and one maintenance year per major. A further security-only year is stated only for licensed Enterprise customers.
-- Its [hosting guidance](../../../packages/docs/docs/self-hosting/considerations.md) assigns upgrades, infrastructure, monitoring, and on-call response to self-hosters. Medplum Cloud handles platform maintenance and upgrades.
+- Its [version policy](../../../../../packages/docs/docs/compliance/versions.md) describes lockstep component versions, weekly patches, sequential minor upgrades, one active year and one maintenance year per major. A further security-only year is stated only for licensed Enterprise customers.
+- Its [hosting guidance](../../../../../packages/docs/docs/self-hosting/considerations.md) assigns upgrades, infrastructure, monitoring, and on-call response to self-hosters. Medplum Cloud handles platform maintenance and upgrades.
 - Public documentation is not evidence of our support agreement or operational capability.
 
 ## Risk analysis
@@ -62,7 +62,7 @@ Probability, severity, acceptability, controls, and residual risk are not evalua
 
 ## License
 
-The inspected server and core manifests declare `Apache-2.0`. The repository contains [Apache License 2.0](../../../LICENSE.txt) and a [NOTICE](../../../NOTICE).
+The inspected server and core manifests declare `Apache-2.0`. The repository contains [Apache License 2.0](../../../../../LICENSE.txt) and a [NOTICE](../../../../../NOTICE).
 
 Still required before release:
 
