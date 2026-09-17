@@ -9,7 +9,7 @@ import { traceAccountAcceptance } from './support/accountAcceptanceTrace';
 const runAcceptance = process.env['MEDPLUM_ACCEPTANCE'] === '1';
 const testTimeout = 300_000;
 
-describe.skipIf(!runAcceptance)('Accounts agent revocation — full-stack Medplum', () => {
+describe.skipIf(!runAcceptance)('Accounts Digitization Bot revocation — full-stack Medplum', () => {
   test.concurrent(
     'AC-ACC-009 revokes Charlie while retaining the other two access paths',
     async () => {
@@ -20,18 +20,18 @@ describe.skipIf(!runAcceptance)('Accounts agent revocation — full-stack Medplu
         const charlie = await fixture.createLinkedMinor();
         expect(
           await fixture.postAsAlice('accounts/agent-grants', {
-            agentId: fixture.digitizerAccountId,
+            agentId: fixture.digitizationBotId,
             memberIds: [fixture.alicePatientId, charlie.id],
             tasks: ['digitize-measurement'],
           })
         ).toMatchObject({ status: 201 });
 
         const revocation = await fixture.postAsAlice('accounts/agent-grants/revoke-member', {
-          agentId: fixture.digitizerAccountId,
+          agentId: fixture.digitizationBotId,
           memberId: charlie.id,
         });
-        const digitizerCharlie = await fixture.createObservationAsDigitizer(charlie.id);
-        const digitizerAlice = await fixture.createObservationAsDigitizer(fixture.alicePatientId);
+        const digitizerCharlie = await fixture.createObservationAsDigitizationBot(charlie.id);
+        const digitizerAlice = await fixture.createObservationAsDigitizationBot(fixture.alicePatientId);
         const aliceCharlie = await fixture.createObservationAsAlice(charlie.id);
 
         expect(revocation).toMatchObject({
@@ -39,7 +39,7 @@ describe.skipIf(!runAcceptance)('Accounts agent revocation — full-stack Medplu
           body: {
             type: 'AGENT_MEMBER_ACCESS_REVOKED',
             payload: {
-              agentId: fixture.digitizerAccountId,
+              agentId: fixture.digitizationBotId,
               revokedMemberId: charlie.id,
               remainingMemberIds: [fixture.alicePatientId],
             },
@@ -65,7 +65,7 @@ describe.skipIf(!runAcceptance)('Accounts agent revocation — full-stack Medplu
         const charlie = await fixture.createLinkedMinor();
         expect(
           await fixture.postAsAlice('accounts/agent-grants', {
-            agentId: fixture.digitizerAccountId,
+            agentId: fixture.digitizationBotId,
             memberIds: [charlie.id],
             tasks: ['digitize-measurement'],
           })
@@ -81,14 +81,16 @@ describe.skipIf(!runAcceptance)('Accounts agent revocation — full-stack Medplu
         };
         expect(
           await fixture.postAsAlice('accounts/agent-grants/revoke-member', {
-            agentId: fixture.digitizerAccountId,
+            agentId: fixture.digitizationBotId,
             memberId: charlie.id,
           })
         ).toMatchObject({ status: 200 });
 
-        const delayedSave = await fixture.createObservationAsDigitizer(charlie.id, delayedRequest);
+        const delayedSave = await fixture.createObservationAsDigitizationBot(charlie.id, delayedRequest);
+        const residualTaskWrite = await fixture.createProvenanceAsDigitizationBot(charlie.id);
 
         expect(delayedSave.status).toBe(403);
+        expect(residualTaskWrite.status).toBe(403);
         expect(await fixture.observationWasPersisted(delayedIdentifier)).toBe(false);
       } finally {
         await fixture.cleanup();

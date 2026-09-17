@@ -19,17 +19,17 @@ describe.skipIf(!runAcceptance)('Accounts family unlink — full-stack Medplum',
         const charlie = await fixture.createLinkedMinor();
         expect(
           await fixture.postAsAlice('accounts/agent-grants', {
-            agentId: fixture.digitizerAccountId,
+            agentId: fixture.digitizationBotId,
             memberIds: [charlie.id],
             tasks: ['digitize-measurement'],
           })
         ).toMatchObject({ status: 201 });
         expect((await fixture.createObservationAsAlice(charlie.id)).status).toBe(201);
-        expect((await fixture.createObservationAsDigitizer(charlie.id)).status).toBe(201);
+        expect((await fixture.createObservationAsDigitizationBot(charlie.id)).status).toBe(201);
 
         const unlink = await fixture.postAsAlice('accounts/family-links/unlink', { memberId: charlie.id });
         const ownerAfterUnlink = await fixture.createObservationAsAlice(charlie.id);
-        const agentAfterUnlink = await fixture.createObservationAsDigitizer(charlie.id);
+        const agentAfterUnlink = await fixture.createObservationAsDigitizationBot(charlie.id);
 
         expect(unlink).toMatchObject({
           status: 200,
@@ -54,7 +54,7 @@ describe.skipIf(!runAcceptance)('Accounts family unlink — full-stack Medplum',
         const charlie = await fixture.createLinkedMinor();
         expect(
           await fixture.postAsAlice('accounts/agent-grants', {
-            agentId: fixture.digitizerAccountId,
+            agentId: fixture.digitizationBotId,
             memberIds: [charlie.id],
             tasks: ['digitize-measurement'],
           })
@@ -73,11 +73,11 @@ describe.skipIf(!runAcceptance)('Accounts family unlink — full-stack Medplum',
           body: { type: 'FAMILY_UNLINK_FAILED', payload: { reason: 'UNAVAILABLE' } },
         });
         expect((await fixture.createObservationAsAlice(charlie.id)).status).toBe(201);
-        expect((await fixture.createObservationAsDigitizer(charlie.id)).status).toBe(201);
+        expect((await fixture.createObservationAsDigitizationBot(charlie.id)).status).toBe(201);
 
         await fixture.restartWithProvisionerPolicyIds({
           ownerPolicyId: randomUUID(),
-          agentPolicyId: fixture.digitizerPolicyId,
+          agentPolicyId: fixture.digitizationBotPolicyId,
         });
         const failedOwnerRemoval = await fixture.postAsAlice('accounts/family-links/unlink', {
           memberId: charlie.id,
@@ -88,11 +88,11 @@ describe.skipIf(!runAcceptance)('Accounts family unlink — full-stack Medplum',
           body: { type: 'FAMILY_UNLINK_FAILED', payload: { reason: 'UNAVAILABLE' } },
         });
         expect((await fixture.createObservationAsAlice(charlie.id)).status).toBe(201);
-        expect((await fixture.createObservationAsDigitizer(charlie.id)).status).toBe(201);
+        expect((await fixture.createObservationAsDigitizationBot(charlie.id)).status).toBe(201);
 
         await fixture.restartWithProvisionerPolicyIds({
           ownerPolicyId: fixture.alicePolicyId,
-          agentPolicyId: fixture.digitizerPolicyId,
+          agentPolicyId: fixture.digitizationBotPolicyId,
         });
         expect(await fixture.postAsAlice('accounts/family-links/unlink', { memberId: charlie.id })).toMatchObject({
           status: 200,

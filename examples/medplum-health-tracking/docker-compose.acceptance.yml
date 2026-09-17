@@ -94,6 +94,7 @@ services:
       MEDPLUM_BOT_LAMBDA_LAYER_NAME: 'medplum-bot-layer'
       MEDPLUM_VM_CONTEXT_BOTS_ENABLED: 'true'
       MEDPLUM_DEFAULT_BOT_RUNTIME_VERSION: 'vmcontext'
+      MEDPLUM_DEFAULT_PROJECT_FEATURES: '["bots"]'
       MEDPLUM_ALLOWED_ORIGINS: '*'
       MEDPLUM_INTROSPECTION_ENABLED: 'true'
       # Local acceptance tests create isolated projects concurrently.

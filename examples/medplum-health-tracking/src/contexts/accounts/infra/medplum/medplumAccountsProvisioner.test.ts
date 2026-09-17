@@ -23,7 +23,10 @@ describe('Medplum Accounts provisioner', () => {
         conditionalCreate = request.headers.get('if-none-exist');
         traceParent = request.headers.get('traceparent');
         return HttpResponse.json({ resourceType: 'Patient', id: 'charlie' }, { status: 201 });
-      })
+      }),
+      http.post(`${baseUrl}fhir/R4/RelatedPerson`, () =>
+        HttpResponse.json({ resourceType: 'RelatedPerson', id: 'alice-charlie' }, { status: 201 })
+      )
     );
 
     const result = await provisioner().createMinorProfile(minorCommand(), { correlationTraceId: traceId });
@@ -129,6 +132,40 @@ describe('Medplum Accounts provisioner', () => {
         id: 'agent-policy',
         resource: [...memberRules('alice'), { resourceType: 'Provenance', interaction: ['create'] }],
       },
+    ]);
+  });
+
+  test('removes task-wide authority when the Bot loses its final granted profile', async () => {
+    const updatedPolicies: unknown[] = [];
+    medplum.use(
+      http.get(`${baseUrl}fhir/R4/AccessPolicy/bot-policy`, () =>
+        HttpResponse.json({
+          resourceType: 'AccessPolicy',
+          id: 'bot-policy',
+          resource: [...memberRules('charlie'), { resourceType: 'Provenance', interaction: ['create'] }],
+        })
+      ),
+      http.put(`${baseUrl}fhir/R4/AccessPolicy/bot-policy`, async ({ request }) => {
+        updatedPolicies.push(await request.json());
+        return HttpResponse.json({ resourceType: 'AccessPolicy', id: 'bot-policy' });
+      })
+    );
+    const accountsProvisioner = createMedplumAccountsProvisioner({
+      baseUrl,
+      accessToken: 'provisioning-token',
+      ownerPolicyIdByAccountId: new Map(),
+      agentPolicyIdByAgentId: new Map([['digitization-bot', 'bot-policy']]),
+    });
+
+    const result = await accountsProvisioner.deactivateAgentAccess?.({
+      grantorAccountId: 'alice-user',
+      agentId: 'digitization-bot',
+      memberId: 'charlie',
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(updatedPolicies).toEqual([
+      { resourceType: 'AccessPolicy', id: 'bot-policy', resource: [] },
     ]);
   });
 });

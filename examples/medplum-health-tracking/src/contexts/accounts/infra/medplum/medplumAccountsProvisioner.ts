@@ -78,7 +78,7 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
     async deactivateAgentAccess(command: DeactivateAgentAccessCommand, context?: AccountRequestContext) {
       const policyId = options.agentPolicyIdByAgentId.get(command.agentId);
       return mutateOnePolicy(createFhirRequester(options, context), policyId, (rules) =>
-        removeMemberRules(rules, command.memberId)
+        removeAgentMemberRules(rules, command.memberId)
       );
     },
 
@@ -96,8 +96,14 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
         await request<Bundle>('POST', '', {
           resourceType: 'Bundle',
           type: 'transaction',
-          entry: originals.map((policy) => ({
-            resource: { ...policy, resource: removeMemberRules(policy.resource ?? [], command.memberId) },
+          entry: originals.map((policy, index) => ({
+            resource: {
+              ...policy,
+              resource:
+                index === 0
+                  ? removeMemberRules(policy.resource ?? [], command.memberId)
+                  : removeAgentMemberRules(policy.resource ?? [], command.memberId),
+            },
             request: { method: 'PUT', url: `AccessPolicy/${policy.id}` },
           })),
         });
@@ -230,4 +236,22 @@ function addRule(rules: AccessPolicyResource[], rule: AccessPolicyResource): Acc
 function removeMemberRules(rules: AccessPolicyResource[], memberId: string): AccessPolicyResource[] {
   const criteria = new Set([`Patient?_id=${memberId}`, `Observation?subject=Patient/${memberId}`]);
   return rules.filter((rule) => !rule.criteria || !criteria.has(rule.criteria));
+}
+
+function removeAgentMemberRules(rules: AccessPolicyResource[], memberId: string): AccessPolicyResource[] {
+  const next = removeMemberRules(rules, memberId);
+  const hasGrantedMember = next.some(
+    (rule) => rule.resourceType === 'Observation' && rule.criteria?.startsWith('Observation?subject=Patient/')
+  );
+  return hasGrantedMember
+    ? next
+    : next.filter(
+        (rule) =>
+          !(
+            rule.resourceType === 'Provenance' &&
+            rule.criteria === undefined &&
+            rule.interaction?.length === 1 &&
+            rule.interaction[0] === 'create'
+          )
+      );
 }

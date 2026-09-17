@@ -117,7 +117,8 @@ Identity systems and Medplum are external boundaries; their mechanisms do not de
 - A Medplum permission refusal when the Bot attempts an operation is authoritative for current access. A past `Agent Access Granted` event cannot substitute for that check.
 - Medplum resources are the durable source of truth for account, member, family-link, and agent-grant state.
 - For baseline acceptance evidence, a self-link is an Accounts-created `RelatedPerson`, and an in-app approval request is a `Task` targeting the member Patient. Onboarding creates neither artifact for Alice, and minor-profile creation creates no approval `Task` for Charlie.
-- The current Accounts acceptance fixture authenticates the digitizer as an invited user. It therefore does not verify `AC-ACC-007`–`010` against the required Medplum Bot service identity.
+- The Accounts acceptance fixture executes a Medplum Bot under its own `ProjectMembership` and scoped `AccessPolicy`;
+  `AC-ACC-007`–`010` observe grant and revocation behavior through that Bot identity.
 
 ## Open design points
 

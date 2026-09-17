@@ -2,7 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { LoginAuthenticationResponse } from '@medplum/core';
 import { createReference, MedplumClient } from '@medplum/core';
-import type { AccessPolicy, Identifier, Observation, ProjectMembership, ResourceType } from '@medplum/fhirtypes';
+import type {
+  AccessPolicy,
+  Bot,
+  Identifier,
+  Observation,
+  Patient,
+  Provenance,
+  ProjectMembership,
+  Resource,
+  ResourceType,
+} from '@medplum/fhirtypes';
 import * as allure from 'allure-js-commons';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm, stat } from 'node:fs/promises';
@@ -36,8 +46,6 @@ export type AccountApiResponse<TBody = unknown> = {
   readonly body: TBody;
 };
 
-export type ObservationActor = 'alice' | 'digitizer';
-
 export type ObservationSubmission = AccountApiResponse & {
   /** Unique search token assigned before submission, including for rejected writes. */
   readonly identifier: Identifier;
@@ -56,15 +64,15 @@ export type AccountAcceptanceFixture = {
   readonly medplumBaseUrl: string;
   readonly admin: MedplumClient;
   readonly alice: MedplumClient;
-  readonly digitizer: MedplumClient;
+  readonly digitizationBot: Bot & { readonly id: string };
   readonly aliceMembership: ProjectMembership;
-  readonly digitizerMembership: ProjectMembership;
+  readonly digitizationBotMembership: ProjectMembership;
   readonly alicePatientId: string;
   readonly aliceAccountId: string;
-  readonly digitizerAccountId: string;
+  readonly digitizationBotId: string;
   readonly aliceKeycloakSubject: string;
   readonly alicePolicyId: string;
-  readonly digitizerPolicyId: string;
+  readonly digitizationBotPolicyId: string;
   postAsAlice<TBody = unknown>(path: string, body?: unknown): Promise<AccountApiResponse<TBody>>;
   createMinorProfile(
     input?: Partial<Omit<CreateMinorProfileRequest, 'relationship'>> &
@@ -72,11 +80,16 @@ export type AccountAcceptanceFixture = {
   ): Promise<{ readonly id: string; readonly response: AccountApiResponse }>;
   createLinkedMinor(): Promise<{ readonly id: string; readonly response: AccountApiResponse }>;
   createObservationAsAlice(patientId: string, observation?: Partial<Observation>): Promise<ObservationSubmission>;
-  createObservationAsDigitizer(patientId: string, observation?: Partial<Observation>): Promise<ObservationSubmission>;
+  createObservationAsDigitizationBot(
+    patientId: string,
+    observation?: Partial<Observation>
+  ): Promise<ObservationSubmission>;
+  createPatientAsDigitizationBot(): Promise<AccountApiResponse>;
+  createProvenanceAsDigitizationBot(patientId: string): Promise<AccountApiResponse>;
   findObservations(identifier: Identifier): Promise<Observation[]>;
   observationWasPersisted(identifier: Identifier): Promise<boolean>;
   readAlicePolicy(): Promise<AccessPolicy>;
-  readDigitizerPolicy(): Promise<AccessPolicy>;
+  readDigitizationBotPolicy(): Promise<AccessPolicy>;
   /** Restarts only the Account HTTP adapter; domain state and all acceptance resources are retained. */
   restartWithProvisionerAccessToken(accessToken: string): Promise<void>;
   restartWithProvisionerPolicyIds(policyIds: {
@@ -136,29 +149,27 @@ export async function createAccountAcceptanceFixture(
     name: `Accounts owner ${randomUUID()}`,
     resource: [],
   });
-  const digitizerPolicy = await admin.createResource<AccessPolicy>({
+  const digitizationBotPolicy = await admin.createResource<AccessPolicy>({
     resourceType: 'AccessPolicy',
     name: `Accounts digitizer ${randomUUID()}`,
     resource: [],
   });
   track(alicePolicy);
-  track(digitizerPolicy);
+  track(digitizationBotPolicy);
 
   const aliceCredentials = await inviteUser(admin, project.id, 'Patient', alicePolicy, 'Alice', 'Owner', track);
-  const digitizerCredentials = await inviteUser(
-    admin,
-    project.id,
-    'Practitioner',
-    digitizerPolicy,
-    'Digitization',
-    'Agent',
-    track
-  );
   const aliceMembership = aliceCredentials.membership;
-  const digitizerMembership = digitizerCredentials.membership;
   const alicePatientId = referenceId(aliceMembership.profile?.reference);
   const aliceAccountId = referenceId(aliceMembership.user?.reference);
-  const digitizerAccountId = referenceId(digitizerMembership.user?.reference);
+  const digitizationBot = await createDigitizationBot(admin, project.id, digitizationBotPolicy, track);
+  const digitizationBotMembership = await admin.searchOne('ProjectMembership', {
+    profile: `Bot/${digitizationBot.id}`,
+  });
+  if (!digitizationBotMembership?.id) {
+    throw new Error('Could not find the Digitization Bot project membership');
+  }
+  track(digitizationBotMembership);
+  const digitizationBotId = digitizationBot.id;
   const keycloakAuthentication = await loginToKeycloak(keycloakBaseUrl, correlationTraceId);
 
   const alicePatient = await admin.readResource('Patient', alicePatientId);
@@ -186,23 +197,12 @@ export async function createAccountAcceptanceFixture(
     },
     correlationTraceId
   );
-  const digitizer = await loginToMedplum(
-    medplumBaseUrl,
-    {
-      email: digitizerCredentials.email,
-      password: digitizerCredentials.password,
-      projectDisplay: project.name,
-      projectId: project.id,
-    },
-    correlationTraceId
-  );
-
   const accountsRepository = createMedplumAccountsState({
     baseUrl: medplumBaseUrl,
     accessToken: requiredToken(admin),
     accountIdentifierSystem: KEYCLOAK_PATIENT_IDENTIFIER_SYSTEM,
     ownerPolicyIdByAccountId: new Map([[keycloakAuthentication.subject, alicePolicy.id]]),
-    agentPolicyIdByAgentId: new Map([[digitizerAccountId, digitizerPolicy.id]]),
+    agentPolicyIdByAgentId: new Map([[digitizationBotId, digitizationBotPolicy.id]]),
   });
   const identityProvider = createKeycloakAccountIdentityProvider({
     keycloakBaseUrl,
@@ -217,14 +217,14 @@ export async function createAccountAcceptanceFixture(
     provisionerAccessToken: string,
     policyIds: { readonly ownerPolicyId: string; readonly agentPolicyId: string } = {
       ownerPolicyId: alicePolicy.id,
-      agentPolicyId: digitizerPolicy.id,
+      agentPolicyId: digitizationBotPolicy.id,
     }
   ): Promise<ListeningServer> {
     const provisioner = createMedplumAccountsProvisioner({
       baseUrl: medplumBaseUrl,
       accessToken: provisionerAccessToken,
       ownerPolicyIdByAccountId: new Map([[keycloakAuthentication.subject, policyIds.ownerPolicyId]]),
-      agentPolicyIdByAgentId: new Map([[digitizerAccountId, policyIds.agentPolicyId]]),
+      agentPolicyIdByAgentId: new Map([[digitizationBotId, policyIds.agentPolicyId]]),
       onError: (error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`),
     });
     return listen(
@@ -273,11 +273,10 @@ export async function createAccountAcceptanceFixture(
     return { id: minor.id, response };
   };
 
-  const submitObservation = async (
-    actor: ObservationActor,
+  const buildObservation = (
     patientId: string,
     observation: Partial<Observation> = {}
-  ): Promise<ObservationSubmission> => {
+  ): { readonly identifier: Identifier; readonly observation: Observation } => {
     const identifier = observation.identifier?.[0] ?? {
       system: OBSERVATION_IDENTIFIER_SYSTEM,
       value: randomUUID(),
@@ -285,15 +284,9 @@ export async function createAccountAcceptanceFixture(
     if (!identifier.system || !identifier.value) {
       throw new Error('Acceptance Observation identifier requires both system and value');
     }
-    const client = actor === 'alice' ? alice : digitizer;
-    const response = await fetch(new URL('fhir/R4/Observation', medplumBaseUrl), {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${requiredToken(client)}`,
-        'content-type': 'application/fhir+json',
-        ...correlationHeaders(correlationTraceId),
-      },
-      body: JSON.stringify({
+    return {
+      identifier,
+      observation: {
         resourceType: 'Observation',
         status: 'final',
         code: { text: 'Digitized weight' },
@@ -301,14 +294,70 @@ export async function createAccountAcceptanceFixture(
         valueQuantity: { value: 32.4, unit: 'kg' },
         ...observation,
         identifier: [identifier],
-      } satisfies Observation),
+      },
+    };
+  };
+
+  const submitObservationAsAlice = async (
+    patientId: string,
+    observation: Partial<Observation> = {}
+  ): Promise<ObservationSubmission> => {
+    const built = buildObservation(patientId, observation);
+    const response = await fetch(new URL('fhir/R4/Observation', medplumBaseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${requiredToken(alice)}`,
+        'content-type': 'application/fhir+json',
+        ...correlationHeaders(correlationTraceId),
+      },
+      body: JSON.stringify(built.observation),
     });
     const body = (await response.json()) as unknown;
     const observationId = isCreatedObservation(response.status, body) ? body.id : undefined;
     if (observationId) {
       track({ resourceType: 'Observation', id: observationId });
     }
-    return { status: response.status, body, identifier, ...(observationId ? { observationId } : {}) };
+    return { status: response.status, body, identifier: built.identifier, ...(observationId ? { observationId } : {}) };
+  };
+
+  const executeDigitizationBot = async (input: Resource): Promise<AccountApiResponse> => {
+    const response = await fetch(new URL(`fhir/R4/Bot/${digitizationBot.id}/$execute`, medplumBaseUrl), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${requiredToken(admin)}`,
+        'content-type': 'application/fhir+json',
+        ...correlationHeaders(correlationTraceId),
+      },
+      body: JSON.stringify(input),
+    });
+    const body = (await response.json()) as unknown;
+    if (!response.ok) {
+      return { status: response.status, body };
+    }
+    if (!isAccountApiResponse(body)) {
+      throw new Error('Digitization Bot returned an invalid execution result');
+    }
+    if (body.status === 200 || body.status === 201) {
+      const resource = body.body as Partial<Resource>;
+      if (resource.resourceType && resource.id) {
+        track({ resourceType: resource.resourceType, id: resource.id });
+      }
+    }
+    return body;
+  };
+
+  const submitObservationAsDigitizationBot = async (
+    patientId: string,
+    observation: Partial<Observation> = {}
+  ): Promise<ObservationSubmission> => {
+    const built = buildObservation(patientId, observation);
+    const result = await executeDigitizationBot(built.observation);
+    const observationId = isCreatedObservation(result.status, result.body) ? result.body.id : undefined;
+    return {
+      ...result,
+      identifier: built.identifier,
+      ...(observationId ? { observationId } : {}),
+    };
   };
 
   const findObservations = async (identifier: Identifier): Promise<Observation[]> => {
@@ -325,26 +374,35 @@ export async function createAccountAcceptanceFixture(
     medplumBaseUrl,
     admin,
     alice,
-    digitizer,
+    digitizationBot,
     aliceMembership,
-    digitizerMembership,
+    digitizationBotMembership,
     alicePatientId,
     aliceAccountId,
-    digitizerAccountId,
+    digitizationBotId,
     aliceKeycloakSubject: keycloakAuthentication.subject,
     alicePolicyId: alicePolicy.id,
-    digitizerPolicyId: digitizerPolicy.id,
+    digitizationBotPolicyId: digitizationBotPolicy.id,
     postAsAlice,
     createMinorProfile,
     createLinkedMinor,
-    createObservationAsAlice: (patientId, observation) => submitObservation('alice', patientId, observation),
-    createObservationAsDigitizer: (patientId, observation) => submitObservation('digitizer', patientId, observation),
+    createObservationAsAlice: submitObservationAsAlice,
+    createObservationAsDigitizationBot: submitObservationAsDigitizationBot,
+    createPatientAsDigitizationBot: () =>
+      executeDigitizationBot({ resourceType: 'Patient', active: true } satisfies Patient),
+    createProvenanceAsDigitizationBot: (patientId) =>
+      executeDigitizationBot({
+        resourceType: 'Provenance',
+        recorded: new Date().toISOString(),
+        target: [{ reference: `Patient/${patientId}` }],
+        agent: [{ who: { reference: `Bot/${digitizationBot.id}` } }],
+      } satisfies Provenance),
     findObservations,
     async observationWasPersisted(identifier): Promise<boolean> {
       return (await findObservations(identifier)).length > 0;
     },
     readAlicePolicy: () => admin.readResource('AccessPolicy', alicePolicy.id),
-    readDigitizerPolicy: () => admin.readResource('AccessPolicy', digitizerPolicy.id),
+    readDigitizationBotPolicy: () => admin.readResource('AccessPolicy', digitizationBotPolicy.id),
     async restartWithProvisionerAccessToken(accessToken): Promise<void> {
       await closeServer(listening.server);
       listening = await startAccountServer(accessToken);
@@ -365,10 +423,11 @@ export async function createAccountAcceptanceFixture(
         Provenance: 1,
         Observation: 2,
         Patient: 3,
-        Practitioner: 4,
-        AccessPolicy: 5,
-        User: 6,
-        Project: 7,
+        Bot: 4,
+        Binary: 5,
+        AccessPolicy: 6,
+        User: 7,
+        Project: 8,
       };
       const resources = [...createdResources.values()].sort(
         (left, right) => (deletionPriority[left.resourceType] ?? 10) - (deletionPriority[right.resourceType] ?? 10)
@@ -378,6 +437,51 @@ export async function createAccountAcceptanceFixture(
       }
     },
   };
+}
+
+async function createDigitizationBot(
+  admin: MedplumClient,
+  projectId: string,
+  policy: AccessPolicy,
+  track: AccountAcceptanceFixture['track']
+): Promise<Bot & { readonly id: string }> {
+  const executableCode = `
+const { getStatus } = require('@medplum/core');
+
+exports.handler = async function (medplum, event) {
+  try {
+    const created = await medplum.createResource(event.input);
+    return { status: 201, body: created };
+  } catch (error) {
+    const outcome = error && typeof error === 'object' ? error.outcome : undefined;
+    return {
+      status: outcome ? getStatus(outcome) : 500,
+      body: outcome ?? { message: error instanceof Error ? error.message : String(error) },
+    };
+  }
+};
+`;
+  const bot = await admin.post<Bot>(`admin/projects/${projectId}/bot`, {
+    name: `Accounts Digitization Bot ${randomUUID()}`,
+    description: 'Acceptance Bot that submits one requested FHIR resource under its own restricted policy',
+    accessPolicy: createReference(policy),
+    runtimeVersion: 'vmcontext',
+    executableCode: {
+      contentType: 'application/javascript',
+      title: 'digitization-bot.cjs',
+      data: Buffer.from(executableCode).toString('base64'),
+    },
+  });
+  if (!bot.id) {
+    throw new Error('Could not create Accounts Digitization Bot');
+  }
+  track({ resourceType: 'Bot', id: bot.id });
+  for (const attachment of [bot.sourceCode, bot.executableCode]) {
+    if (attachment?.url?.startsWith('Binary/')) {
+      track({ resourceType: 'Binary', id: referenceId(attachment.url) });
+    }
+  }
+  return bot as Bot & { readonly id: string };
 }
 
 async function inviteUser(
@@ -655,6 +759,16 @@ function isCreatedObservation(status: number, body: unknown): body is Observatio
     body.resourceType === 'Observation' &&
     'id' in body &&
     typeof body.id === 'string'
+  );
+}
+
+function isAccountApiResponse(value: unknown): value is AccountApiResponse {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'status' in value &&
+    typeof value.status === 'number' &&
+    'body' in value
   );
 }
 
