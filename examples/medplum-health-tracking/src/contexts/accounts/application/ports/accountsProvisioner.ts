@@ -1,37 +1,31 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
-import type { AgentTask } from '../../domain/account';
+import type {
+  CreateMinorProfileRequest,
+  FamilyMemberRequest,
+  GrantAgentAccessRequest,
+  RevokeAgentMemberAccessRequest,
+} from '../contracts/accountsApi';
 
 export type CreateMinorProfileCommand = {
   readonly accountId: string;
-  readonly member: {
-    readonly id: string;
-    readonly identifier: { readonly system: string; readonly value: string };
-    readonly name: { readonly given: string[]; readonly family: string };
-    readonly birthDate: string;
-  };
-  readonly relationship: 'parent' | 'guardian';
+  readonly member: Omit<CreateMinorProfileRequest, 'relationship'>;
+  readonly relationship: CreateMinorProfileRequest['relationship'];
 };
 
-export type MemberAccessCommand = { readonly accountId: string; readonly memberId: string };
+export type MemberAccessCommand = { readonly accountId: string } & FamilyMemberRequest;
 
-export type AgentGrantCommand = {
+export type AgentGrantCommand = GrantAgentAccessRequest & {
   readonly grantorAccountId: string;
-  readonly agentId: string;
-  readonly memberIds: string[];
   readonly previousMemberIds: string[];
-  readonly tasks: AgentTask[];
 };
 
-export type AgentMemberAccessCommand = {
+export type AgentMemberAccessCommand = RevokeAgentMemberAccessRequest & {
   readonly grantorAccountId: string;
-  readonly agentId: string;
-  readonly memberId: string;
 };
 
-export type FamilyAccessCommand = {
+export type FamilyAccessCommand = FamilyMemberRequest & {
   readonly accountId: string;
-  readonly memberId: string;
   readonly derivativeAgentIds: string[];
 };
 

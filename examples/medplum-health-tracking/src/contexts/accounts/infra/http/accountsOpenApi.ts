@@ -1,137 +1,48 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
+import type { z } from 'zod';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+import {
+  agentAccessGrantedEventSchema,
+  agentMemberAccessRevokedEventSchema,
+  agentTaskSchema,
+  createMinorProfileRequestSchema,
+  errorResponseSchema,
+  familyLinkActivatedEventSchema,
+  familyLinkEndedEventSchema,
+  familyMemberRequestSchema,
+  grantAgentAccessRequestSchema,
+  minorProfileCreatedEventSchema,
+  onboardAccountEventSchema,
+  patientReferenceSchema,
+  revokeAgentMemberAccessRequestSchema,
+} from '../../application/contracts/accountsApi';
 
 const content = (schema: string) => ({
   'application/json': { schema: { $ref: `#/components/schemas/${schema}` } },
 });
 
-const event = (type: string, payload: Record<string, unknown>) => ({
-  type: 'object',
-  additionalProperties: false,
-  required: ['type', 'payload'],
-  properties: {
-    type: { const: type },
-    payload: { type: 'object', additionalProperties: false, ...payload },
-  },
-});
+const openApiSchema = (schema: z.ZodTypeAny) => zodToJsonSchema(schema, { target: 'openApi3', $refStrategy: 'none' });
 
 export const ACCOUNTS_OPENAPI = {
   openapi: '3.1.0',
   info: { title: 'Family Wellness Accounts API', version: '1.0.0' },
   components: {
     schemas: {
-      PatientReference: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['resourceType', 'id'],
-        properties: { resourceType: { const: 'Patient' }, id: { type: 'string', minLength: 1 } },
-      },
-      Error: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['code'],
-        properties: { code: { type: 'string', minLength: 1 } },
-      },
-      OnboardAccountEvent: event('ACCOUNT_ONBOARDED', {
-        required: ['accountId', 'selfMember', 'selectableMembers'],
-        properties: {
-          accountId: { type: 'string', minLength: 1 },
-          selfMember: { $ref: '#/components/schemas/PatientReference' },
-          selectableMembers: { type: 'array', items: { $ref: '#/components/schemas/PatientReference' } },
-        },
-      }),
-      CreateMinorProfileCommand: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['id', 'identifier', 'name', 'birthDate', 'relationship'],
-        properties: {
-          id: { type: 'string', minLength: 1 },
-          identifier: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['system', 'value'],
-            properties: { system: { type: 'string', format: 'uri' }, value: { type: 'string', minLength: 1 } },
-          },
-          name: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['given', 'family'],
-            properties: {
-              given: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
-              family: { type: 'string', minLength: 1 },
-            },
-          },
-          birthDate: { type: 'string', format: 'date' },
-          relationship: { type: 'string', enum: ['parent', 'guardian'] },
-        },
-      },
-      MinorProfileCreatedEvent: event('MINOR_PROFILE_CREATED', {
-        required: ['member', 'relationship'],
-        properties: {
-          member: { $ref: '#/components/schemas/PatientReference' },
-          relationship: { type: 'string', enum: ['parent', 'guardian'] },
-        },
-      }),
-      ActivateFamilyLinkCommand: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['memberId'],
-        properties: { memberId: { type: 'string', minLength: 1 } },
-      },
-      FamilyLinkActivatedEvent: event('FAMILY_LINK_ACTIVATED', {
-        required: ['member', 'selectableMembers'],
-        properties: {
-          member: { $ref: '#/components/schemas/PatientReference' },
-          selectableMembers: { type: 'array', items: { $ref: '#/components/schemas/PatientReference' } },
-        },
-      }),
-      AgentTask: { type: 'string', enum: ['digitize-measurement'] },
-      GrantAgentAccessCommand: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['agentId', 'memberIds', 'tasks'],
-        properties: {
-          agentId: { type: 'string', minLength: 1 },
-          memberIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
-          tasks: { type: 'array', minItems: 1, uniqueItems: true, items: { $ref: '#/components/schemas/AgentTask' } },
-        },
-      },
-      AgentAccessGrantedEvent: event('AGENT_ACCESS_GRANTED', {
-        required: ['grantorAccountId', 'agentId', 'memberIds', 'tasks'],
-        properties: {
-          grantorAccountId: { type: 'string', minLength: 1 },
-          agentId: { type: 'string', minLength: 1 },
-          memberIds: { type: 'array', items: { type: 'string', minLength: 1 } },
-          tasks: { type: 'array', items: { $ref: '#/components/schemas/AgentTask' } },
-        },
-      }),
-      RevokeAgentMemberAccessCommand: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['agentId', 'memberId'],
-        properties: { agentId: { type: 'string', minLength: 1 }, memberId: { type: 'string', minLength: 1 } },
-      },
-      AgentMemberAccessRevokedEvent: event('AGENT_MEMBER_ACCESS_REVOKED', {
-        required: ['agentId', 'revokedMemberId', 'remainingMemberIds'],
-        properties: {
-          agentId: { type: 'string', minLength: 1 },
-          revokedMemberId: { type: 'string', minLength: 1 },
-          remainingMemberIds: { type: 'array', items: { type: 'string', minLength: 1 } },
-        },
-      }),
-      UnlinkFamilyMemberCommand: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['memberId'],
-        properties: { memberId: { type: 'string', minLength: 1 } },
-      },
-      FamilyLinkEndedEvent: event('FAMILY_LINK_ENDED', {
-        required: ['memberId', 'selectableMembers'],
-        properties: {
-          memberId: { type: 'string', minLength: 1 },
-          selectableMembers: { type: 'array', items: { $ref: '#/components/schemas/PatientReference' } },
-        },
-      }),
+      PatientReference: openApiSchema(patientReferenceSchema),
+      Error: openApiSchema(errorResponseSchema),
+      OnboardAccountEvent: openApiSchema(onboardAccountEventSchema),
+      CreateMinorProfileCommand: openApiSchema(createMinorProfileRequestSchema),
+      MinorProfileCreatedEvent: openApiSchema(minorProfileCreatedEventSchema),
+      ActivateFamilyLinkCommand: openApiSchema(familyMemberRequestSchema),
+      FamilyLinkActivatedEvent: openApiSchema(familyLinkActivatedEventSchema),
+      AgentTask: openApiSchema(agentTaskSchema),
+      GrantAgentAccessCommand: openApiSchema(grantAgentAccessRequestSchema),
+      AgentAccessGrantedEvent: openApiSchema(agentAccessGrantedEventSchema),
+      RevokeAgentMemberAccessCommand: openApiSchema(revokeAgentMemberAccessRequestSchema),
+      AgentMemberAccessRevokedEvent: openApiSchema(agentMemberAccessRevokedEventSchema),
+      UnlinkFamilyMemberCommand: openApiSchema(familyMemberRequestSchema),
+      FamilyLinkEndedEvent: openApiSchema(familyLinkEndedEventSchema),
     },
   },
   paths: {
@@ -153,6 +64,7 @@ export const ACCOUNTS_OPENAPI = {
         requestBody: { required: true, content: content('CreateMinorProfileCommand') },
         responses: {
           '201': { description: 'Minor profile created without a login', content: content('MinorProfileCreatedEvent') },
+          '400': { description: 'Invalid minor profile input', content: content('Error') },
           '409': { description: 'Identifier collision or creation failure', content: content('Error') },
         },
       },
@@ -164,6 +76,7 @@ export const ACCOUNTS_OPENAPI = {
         requestBody: { required: true, content: content('ActivateFamilyLinkCommand') },
         responses: {
           '201': { description: 'Family link activated', content: content('FamilyLinkActivatedEvent') },
+          '400': { description: 'Invalid family link input', content: content('Error') },
           '503': { description: 'Access activation not confirmed', content: content('Error') },
         },
       },
@@ -186,6 +99,7 @@ export const ACCOUNTS_OPENAPI = {
         requestBody: { required: true, content: content('RevokeAgentMemberAccessCommand') },
         responses: {
           '200': { description: 'Selected agent access revoked', content: content('AgentMemberAccessRevokedEvent') },
+          '400': { description: 'Invalid agent revocation input', content: content('Error') },
           '503': { description: 'Revocation not confirmed', content: content('Error') },
         },
       },
@@ -197,6 +111,7 @@ export const ACCOUNTS_OPENAPI = {
         requestBody: { required: true, content: content('UnlinkFamilyMemberCommand') },
         responses: {
           '200': { description: 'Family link ended', content: content('FamilyLinkEndedEvent') },
+          '400': { description: 'Invalid family unlink input', content: content('Error') },
           '503': { description: 'Access removal not confirmed', content: content('Error') },
         },
       },

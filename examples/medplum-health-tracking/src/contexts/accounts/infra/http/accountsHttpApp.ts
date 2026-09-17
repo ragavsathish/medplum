@@ -2,14 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { Express, Response } from 'express';
 import express from 'express';
-import type { AccountIdentityProvider } from '../../application/ports/accountIdentityProvider';
+import {
+  createMinorProfileRequestSchema,
+  familyMemberRequestSchema,
+  grantAgentAccessRequestSchema,
+  revokeAgentMemberAccessRequestSchema,
+} from '../../application/contracts/accountsApi';
+import type {
+  AccountAuthenticationResult,
+  AccountIdentityProvider,
+} from '../../application/ports/accountIdentityProvider';
 import type {
   AccountsProvisioner,
   AgentGrantCommand,
   CreateMinorProfileCommand,
 } from '../../application/ports/accountsProvisioner';
 import type { AccountsRepository } from '../../application/ports/accountsRepository';
-import type { AgentTask } from '../../domain/account';
 import {
   activateFamilyLink,
   endFamilyLink,
@@ -75,21 +83,12 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       return;
     }
 
-    const input = request.body as Partial<CreateMinorProfileCommand['member']> & {
-      relationship?: CreateMinorProfileCommand['relationship'];
-    };
-    if (
-      !input.id ||
-      !input.identifier?.system ||
-      !input.identifier.value ||
-      !input.name?.given?.length ||
-      !input.name.family ||
-      !input.birthDate ||
-      (input.relationship !== 'parent' && input.relationship !== 'guardian')
-    ) {
+    const parsed = createMinorProfileRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
       response.status(400).json({ code: 'INVALID_MINOR_PROFILE' });
       return;
     }
+    const input = parsed.data;
 
     if (!options.provisioner) {
       response.status(503).json({ code: 'PROVISIONER_UNAVAILABLE' });
@@ -139,8 +138,13 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
     }
     const { accountId } = authentication.identity;
     const account = await accountsRepository.find(accountId);
-    const memberId = typeof request.body?.memberId === 'string' ? request.body.memberId : undefined;
-    if (!account || !memberId || !account.minorProfileIds.has(memberId)) {
+    const parsed = familyMemberRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ code: 'INVALID_FAMILY_LINK' });
+      return;
+    }
+    const { memberId } = parsed.data;
+    if (!account || !account.minorProfileIds.has(memberId)) {
       response.status(409).json({ code: 'MINOR_PROFILE_NOT_AVAILABLE' });
       return;
     }
@@ -177,25 +181,15 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
     }
     const { accountId } = authentication.identity;
     const account = await accountsRepository.find(accountId);
-    const agentId = typeof request.body?.agentId === 'string' ? request.body.agentId : undefined;
-    const memberIds = Array.isArray(request.body?.memberIds)
-      ? request.body.memberIds.filter((id: unknown): id is string => typeof id === 'string')
-      : [];
-    const requestedTasks = Array.isArray(request.body?.tasks)
-      ? request.body.tasks.filter((task: unknown): task is string => typeof task === 'string')
-      : [];
-    const tasks = requestedTasks as AgentTask[];
+    const parsed = grantAgentAccessRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ code: 'INVALID_AGENT_GRANT' });
+      return;
+    }
+    const { agentId, memberIds, tasks } = parsed.data;
     const permittedMemberIds = account ? new Set([account.selfMemberId, ...account.linkedMemberIds]) : new Set();
 
-    if (
-      !account ||
-      !agentId ||
-      memberIds.length === 0 ||
-      tasks.length === 0 ||
-      requestedTasks.length !== request.body?.tasks?.length ||
-      requestedTasks.some((task: string) => task !== 'digitize-measurement') ||
-      memberIds.some((id: string) => !permittedMemberIds.has(id))
-    ) {
+    if (!account || memberIds.some((id) => !permittedMemberIds.has(id))) {
       response.status(400).json({ code: 'INVALID_AGENT_GRANT' });
       return;
     }
@@ -232,10 +226,14 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
     }
     const { accountId } = authentication.identity;
     const account = await accountsRepository.find(accountId);
-    const agentId = typeof request.body?.agentId === 'string' ? request.body.agentId : undefined;
-    const memberId = typeof request.body?.memberId === 'string' ? request.body.memberId : undefined;
-    const grant = agentId ? account?.agentGrants.get(agentId) : undefined;
-    if (!account || !agentId || !memberId || !grant?.memberIds.has(memberId)) {
+    const parsed = revokeAgentMemberAccessRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ code: 'INVALID_AGENT_REVOCATION' });
+      return;
+    }
+    const { agentId, memberId } = parsed.data;
+    const grant = account?.agentGrants.get(agentId);
+    if (!account || !grant?.memberIds.has(memberId)) {
       response.status(409).json({ code: 'AGENT_MEMBER_ACCESS_NOT_ACTIVE' });
       return;
     }
@@ -274,8 +272,13 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
     }
     const { accountId } = authentication.identity;
     const account = await accountsRepository.find(accountId);
-    const memberId = typeof request.body?.memberId === 'string' ? request.body.memberId : undefined;
-    if (!account || !memberId || !account.linkedMemberIds.has(memberId)) {
+    const parsed = familyMemberRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ code: 'INVALID_FAMILY_UNLINK' });
+      return;
+    }
+    const { memberId } = parsed.data;
+    if (!account || !account.linkedMemberIds.has(memberId)) {
       response.status(409).json({ code: 'FAMILY_LINK_NOT_ACTIVE' });
       return;
     }
@@ -316,7 +319,7 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
 
 function sendAuthenticationFailure(
   response: Response,
-  reason: 'AUTHENTICATION_REQUIRED' | 'SELF_MEMBER_UNAVAILABLE'
+  reason: Extract<AccountAuthenticationResult, { readonly ok: false }>['reason']
 ): void {
   response.status(reason === 'AUTHENTICATION_REQUIRED' ? 401 : 409).json({ code: reason });
 }

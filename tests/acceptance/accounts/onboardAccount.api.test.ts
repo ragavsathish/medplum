@@ -71,6 +71,18 @@ describe('Accounts HTTP API — onboarding', () => {
     expect(
       body.paths?.['/accounts/agent-grants']?.post?.responses?.['201']?.content?.['application/json']?.schema
     ).toEqual({ $ref: '#/components/schemas/AgentAccessGrantedEvent' });
+    expect(body.components?.schemas?.['AgentTask']).toEqual({
+      type: 'string',
+      enum: ['digitize-measurement'],
+    });
+    expect(body.components?.schemas?.['CreateMinorProfileCommand']).toMatchObject({
+      additionalProperties: false,
+      required: ['id', 'identifier', 'name', 'birthDate', 'relationship'],
+      properties: {
+        birthDate: { type: 'string', format: 'date' },
+        relationship: { type: 'string', enum: ['parent', 'guardian'] },
+      },
+    });
   });
 
   test('identifies one account and selectable self-member profile for the authenticated identity', async () => {
@@ -206,6 +218,30 @@ describe('Accounts HTTP API — onboarding', () => {
         payload: { reason: 'IDENTIFIER_COLLISION' },
       },
     });
+  });
+
+  test('rejects a minor-profile body that does not satisfy the published schema', async () => {
+    useAliceSession();
+    let provisioned = false;
+    const provisioner: AccountsProvisioner = {
+      async createMinorProfile() {
+        provisioned = true;
+        return { ok: true };
+      },
+    };
+    const appServer = await listen(createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner })));
+    await postJson(`${appServer.url}accounts/onboard`, undefined);
+
+    const result = await postJson(`${appServer.url}accounts/minor-profiles`, {
+      id: '20000000-0000-4000-8000-000000000002',
+      identifier: { system: 'not-a-uri', value: 'charlie-2018' },
+      name: { given: ['Charlie'], family: 'Example' },
+      birthDate: '2018-03-04',
+      relationship: 'parent',
+    });
+
+    expect(result).toEqual({ status: 400, body: { code: 'INVALID_MINOR_PROFILE' } });
+    expect(provisioned).toBe(false);
   });
 
   test('links and exposes a minor profile only after owner access is confirmed active', async () => {
@@ -378,6 +414,33 @@ describe('Accounts HTTP API — onboarding', () => {
       agentId: 'digitizer-1',
       memberIds: ['alice'],
       tasks: ['digitize-measurement', 'manage-family'],
+    });
+
+    expect(result).toEqual({ status: 400, body: { code: 'INVALID_AGENT_GRANT' } });
+    expect(provisioned).toBe(false);
+  });
+
+  test('does not silently discard a malformed member id from an otherwise valid grant', async () => {
+    useAliceSession();
+    let provisioned = false;
+    const provisioner: AccountsProvisioner = {
+      async createMinorProfile() {
+        return { ok: true };
+      },
+      async activateOwnerAccess() {
+        return { ok: true };
+      },
+      async activateAgentAccess() {
+        provisioned = true;
+        return { ok: true };
+      },
+    };
+    const appServer = await createLinkedFamily(provisioner);
+
+    const result = await postJson(`${appServer.url}accounts/agent-grants`, {
+      agentId: 'digitizer-1',
+      memberIds: ['alice', 42],
+      tasks: ['digitize-measurement'],
     });
 
     expect(result).toEqual({ status: 400, body: { code: 'INVALID_AGENT_GRANT' } });
