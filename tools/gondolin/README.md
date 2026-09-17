@@ -1,67 +1,68 @@
 # Health Tracking Gondolin environment
 
-This tool creates an isolated, Docker-capable Linux VM for the Medplum Health
-Tracking environment. The current Medplum worktree is mounted at `/workspace`.
-Docker and Compose run inside the VM; no guest or container port is forwarded
-to the host by default.
+Runs the Medplum Health Tracking Compose stack inside an isolated Linux VM.
+No VM or container ports are exposed to the host.
 
-## Install and build
+## Requirements
 
-From the repository root:
+- Apple Silicon/aarch64
+- Node.js and npm on the host
+
+Gondolin is a local npm dependency, not a required global install. Install it
+and the launcher dependencies with:
 
 ```bash
 npm run env:health:install
-npm run env:health:image
 ```
 
-The image is tagged `medplum-health-tracking:alpine-3.23` and contains Node 24,
-npm, Git, Docker, Docker Compose, cgroup v2 support, and OverlayFS support.
+## Setup
 
-## Start the VM
+Run these once from the repository root:
+
+```bash
+# Build the Linux image with Node, Docker, and Compose.
+npm run env:health:image
+
+# Run Linux npm ci and cache the Compose images.
+npm run env:health:warm
+```
+
+Start a fresh copy-on-write VM:
 
 ```bash
 npm run env:health:vm
 ```
 
-Inside the VM:
+Inside the VM, start the application stack:
 
 ```bash
-docker compose -f docker-compose.full-stack.yml config --services
-docker compose -f docker-compose.full-stack.yml up -d
+docker compose up -d --wait --pull never
 ```
 
-The default VM has 8 GB RAM, four CPUs, and a 24 GB copy-on-write root disk.
-Override these using `MEDPLUM_HEALTH_VM_MEMORY`, `MEDPLUM_HEALTH_VM_CPUS`, and
-`MEDPLUM_HEALTH_VM_DISK`.
+## Dependency cache
 
-## Image-only warm checkpoint
+`env:health:warm` installs the repository's Linux `node_modules` and stores
+them in the warm checkpoint. The cache is mounted only when its
+`package-lock.json` hash matches the current worktree.
 
-To cache Docker images without retaining containers or volumes, start a clean
-VM and run only:
+Refresh the cache after changing the lockfile:
 
 ```bash
-docker compose -f docker-compose.full-stack.yml pull
-docker container ls -a
-docker volume ls
+FORCE_MEDPLUM_HEALTH_CHECKPOINT=1 npm run env:health:warm
 ```
 
-From another host terminal, find and snapshot the running VM:
+Use another worktree with:
 
 ```bash
-tools/gondolin/node_modules/.bin/gondolin list
-tools/gondolin/node_modules/.bin/gondolin snapshot VM_ID \
-  --output "$HOME/.cache/gondolin/medplum-health-images.qcow2"
+MEDPLUM_HEALTH_WORKSPACE=/path/to/worktree npm run env:health:warm
+MEDPLUM_HEALTH_WORKSPACE=/path/to/worktree npm run env:health:vm
 ```
 
-Resume that immutable baseline in the current worktree:
+Use a separate `MEDPLUM_HEALTH_CHECKPOINT_PATH` when parallel worktrees have
+different lockfiles.
 
-```bash
-MEDPLUM_HEALTH_CHECKPOINT="$HOME/.cache/gondolin/medplum-health-images.qcow2" \
-  npm run env:health:vm
-```
+## Isolation
 
-Then create fresh containers and volumes from the cached images:
-
-```bash
-docker compose -f docker-compose.full-stack.yml up -d --pull never
-```
+The checkpoint retains Docker images and Linux dependencies, but no containers
+or application data volumes. Every launch gets a fresh copy-on-write VM, Docker
+network, and volume state.

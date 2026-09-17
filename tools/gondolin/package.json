@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "image": "sh ./build-image.sh",
+    "warm": "node ./warm-checkpoint.mjs",
     "vm": "node ./run-vm.mjs"
   },
   "dependencies": {
