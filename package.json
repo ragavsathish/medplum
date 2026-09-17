@@ -21,7 +21,9 @@
     "prettier": "prettier --write \"**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,json}\"",
     "sort-package-json": "sort-package-json package.json \"packages/*/package.json\" \"examples/*/package.json\"",
     "test": "turbo run test --filter=!@medplum/docs",
-    "test:acceptance:accounts:docker": "cross-env MEDPLUM_DOCKER_ACCEPTANCE=1 vitest run --config tests/acceptance/vitest.config.mts --maxWorkers=2 --maxConcurrency=2 tests/acceptance/accounts/accounts.docker.ac-001-006.api.test.ts tests/acceptance/accounts/accounts.docker.ac-007-012.api.test.ts"
+    "test:acceptance:accounts:docker": "cross-env MEDPLUM_DOCKER_ACCEPTANCE=1 vitest run --config tests/acceptance/vitest.config.mts --maxWorkers=2 --maxConcurrency=2 tests/acceptance/accounts/accounts.docker.ac-001-006.api.test.ts tests/acceptance/accounts/accounts.docker.ac-007-012.api.test.ts",
+    "test:acceptance:health-tracking": "vitest run --config tests/acceptance/vitest.config.mts",
+    "test:acceptance:health-tracking:docker": "cross-env MEDPLUM_DOCKER_ACCEPTANCE=1 vitest run --config tests/acceptance/vitest.config.mts"
   },
   "prettier": {
     "plugins": [
