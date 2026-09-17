@@ -1,0 +1,20 @@
+{
+  "network": {
+    "enabled": true,
+    "allowedHosts": [
+      "github.com",
+      "api.github.com",
+      "registry.npmjs.org",
+      "dl-cdn.alpinelinux.org",
+      "*.docker.com",
+      "*.docker.io",
+      "quay.io",
+      "*.quay.io",
+      "packages.fhir.org",
+      "packages2.fhir.org",
+      "raw.githubusercontent.com"
+    ],
+    "allowWebSockets": false,
+    "blockInternalRanges": true
+  }
+}
