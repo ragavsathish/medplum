@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 import type { Bundle, Patient } from '@medplum/fhirtypes';
+import { randomUUID } from 'node:crypto';
 import type {
   AccountAuthenticationResult,
   AccountIdentityProvider,
@@ -20,7 +21,7 @@ export function createKeycloakAccountIdentityProvider(
   options: KeycloakAccountIdentityProviderOptions
 ): AccountIdentityProvider {
   return {
-    async authenticate(authorization) {
+    async authenticate(authorization, context) {
       if (!authorization?.match(/^Bearer\s+\S+$/i)) {
         return authenticationRequired();
       }
@@ -29,7 +30,7 @@ export function createKeycloakAccountIdentityProvider(
           `realms/${encodeURIComponent(options.realm)}/protocol/openid-connect/userinfo`,
           options.keycloakBaseUrl
         ),
-        { headers: { authorization } }
+        { headers: { authorization, ...correlationHeaders(context?.correlationTraceId) } }
       );
       if (!userInfoResponse.ok) {
         return authenticationRequired();
@@ -44,7 +45,10 @@ export function createKeycloakAccountIdentityProvider(
         _count: '2',
       });
       const patientResponse = await fetch(new URL(`fhir/R4/Patient?${query}`, options.medplumBaseUrl), {
-        headers: { authorization: `Bearer ${options.medplumAccessToken}` },
+        headers: {
+          authorization: `Bearer ${options.medplumAccessToken}`,
+          ...correlationHeaders(context?.correlationTraceId),
+        },
       });
       if (!patientResponse.ok) {
         return selfMemberUnavailable();
@@ -66,6 +70,10 @@ export function createKeycloakAccountIdentityProvider(
       };
     },
   };
+}
+
+function correlationHeaders(traceId: string | undefined): Record<string, string> {
+  return traceId ? { traceparent: `00-${traceId}-${randomUUID().replaceAll('-', '').slice(0, 16)}-01` } : {};
 }
 
 function authenticationRequired(): AccountAuthenticationResult {

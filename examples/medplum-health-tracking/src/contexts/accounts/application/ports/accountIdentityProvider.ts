@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
+import type { AccountRequestContext } from './accountRequestContext';
 
 export type AccountIdentity = {
   readonly accountId: string;
@@ -11,5 +12,8 @@ export type AccountAuthenticationResult =
   | { readonly ok: false; readonly reason: 'AUTHENTICATION_REQUIRED' | 'SELF_MEMBER_UNAVAILABLE' };
 
 export type AccountIdentityProvider = {
-  authenticate(authorization: string | undefined): Promise<AccountAuthenticationResult>;
+  authenticate(
+    authorization: string | undefined,
+    context?: AccountRequestContext
+  ): Promise<AccountAuthenticationResult>;
 };

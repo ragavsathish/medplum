@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
+import type { AccessPolicyResource } from '@medplum/fhirtypes';
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
@@ -15,17 +16,21 @@ afterAll(() => medplum.close());
 describe('Medplum Accounts provisioner', () => {
   test('uses an atomic conditional create for a new minor identifier', async () => {
     let conditionalCreate: string | null = null;
+    let traceParent: string | null = null;
+    const traceId = '11111111111111111111111111111111';
     medplum.use(
       http.post(`${baseUrl}fhir/R4/Patient`, ({ request }) => {
         conditionalCreate = request.headers.get('if-none-exist');
+        traceParent = request.headers.get('traceparent');
         return HttpResponse.json({ resourceType: 'Patient', id: 'charlie' }, { status: 201 });
       })
     );
 
-    const result = await provisioner().createMinorProfile(minorCommand());
+    const result = await provisioner().createMinorProfile(minorCommand(), { correlationTraceId: traceId });
 
     expect(result).toEqual({ ok: true, memberId: 'charlie' });
     expect(conditionalCreate).toBe('identifier=https://family.example/member-id|charlie-2018');
+    expect(traceParent).toMatch(new RegExp(`^00-${traceId}-[0-9a-f]{16}-01$`));
   });
 
   test('reports a conditional-create match as an identifier collision', async () => {
@@ -128,7 +133,7 @@ describe('Medplum Accounts provisioner', () => {
   });
 });
 
-function provisioner() {
+function provisioner(): ReturnType<typeof createMedplumAccountsProvisioner> {
   return createMedplumAccountsProvisioner({
     baseUrl,
     accessToken: 'provisioning-token',
@@ -137,7 +142,7 @@ function provisioner() {
   });
 }
 
-function minorCommand() {
+function minorCommand(): Parameters<ReturnType<typeof createMedplumAccountsProvisioner>['createMinorProfile']>[0] {
   return {
     accountId: 'alice-user',
     member: {
@@ -150,7 +155,7 @@ function minorCommand() {
   };
 }
 
-function memberRules(memberId: string) {
+function memberRules(memberId: string): AccessPolicyResource[] {
   return [
     {
       resourceType: 'Patient' as const,

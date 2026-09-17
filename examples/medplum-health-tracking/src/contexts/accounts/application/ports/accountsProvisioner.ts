@@ -6,6 +6,7 @@ import type {
   GrantAgentAccessRequest,
   RevokeAgentMemberAccessRequest,
 } from '../contracts/accountsApi';
+import type { AccountRequestContext } from './accountRequestContext';
 
 export type CreateMinorProfileCommand = {
   readonly accountId: string;
@@ -33,13 +34,17 @@ type ProvisioningResult = { readonly ok: true } | { readonly ok: false; readonly
 
 export type AccountsProvisioner = {
   createMinorProfile(
-    command: CreateMinorProfileCommand
+    command: CreateMinorProfileCommand,
+    context?: AccountRequestContext
   ): Promise<
     | { readonly ok: true; readonly memberId?: string }
     | { readonly ok: false; readonly reason: 'IDENTIFIER_COLLISION' | 'UNAVAILABLE' }
   >;
-  activateOwnerAccess?(command: MemberAccessCommand): Promise<ProvisioningResult>;
-  activateAgentAccess?(command: AgentGrantCommand): Promise<ProvisioningResult>;
-  deactivateAgentAccess?(command: AgentMemberAccessCommand): Promise<ProvisioningResult>;
-  deactivateFamilyAccess?(command: FamilyAccessCommand): Promise<ProvisioningResult>;
+  activateOwnerAccess?(command: MemberAccessCommand, context?: AccountRequestContext): Promise<ProvisioningResult>;
+  activateAgentAccess?(command: AgentGrantCommand, context?: AccountRequestContext): Promise<ProvisioningResult>;
+  deactivateAgentAccess?(
+    command: AgentMemberAccessCommand,
+    context?: AccountRequestContext
+  ): Promise<ProvisioningResult>;
+  deactivateFamilyAccess?(command: FamilyAccessCommand, context?: AccountRequestContext): Promise<ProvisioningResult>;
 };

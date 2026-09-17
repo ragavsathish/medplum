@@ -3,6 +3,7 @@
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
+import type { AccountIdentityProvider } from '../../application/ports/accountIdentityProvider';
 import { createKeycloakAccountIdentityProvider } from './keycloakAccountIdentityProvider';
 
 const keycloakBaseUrl = 'http://keycloak.test/';
@@ -15,9 +16,11 @@ afterAll(() => server.close());
 
 describe('Keycloak Account identity provider', () => {
   test('maps an authenticated Keycloak subject to one Medplum self-member', async () => {
+    const traceId = '11111111111111111111111111111111';
     server.use(
       http.get(`${keycloakBaseUrl}realms/family-wellness/protocol/openid-connect/userinfo`, ({ request }) => {
         expect(request.headers.get('authorization')).toBe('Bearer alice-keycloak-token');
+        expect(request.headers.get('traceparent')).toMatch(new RegExp(`^00-${traceId}-[0-9a-f]{16}-01$`));
         return HttpResponse.json({ sub: 'alice-keycloak-sub' });
       }),
       http.get(`${medplumBaseUrl}fhir/R4/Patient`, ({ request }) => {
@@ -25,6 +28,7 @@ describe('Keycloak Account identity provider', () => {
           'https://family.example/identity/keycloak-sub|alice-keycloak-sub'
         );
         expect(request.headers.get('authorization')).toBe('Bearer medplum-directory-token');
+        expect(request.headers.get('traceparent')).toMatch(new RegExp(`^00-${traceId}-[0-9a-f]{16}-01$`));
         return HttpResponse.json({
           resourceType: 'Bundle',
           type: 'searchset',
@@ -34,7 +38,9 @@ describe('Keycloak Account identity provider', () => {
       })
     );
 
-    const result = await identityProvider().authenticate('Bearer alice-keycloak-token');
+    const result = await identityProvider().authenticate('Bearer alice-keycloak-token', {
+      correlationTraceId: traceId,
+    });
 
     expect(result).toEqual({
       ok: true,
@@ -75,7 +81,7 @@ describe('Keycloak Account identity provider', () => {
   });
 });
 
-function identityProvider() {
+function identityProvider(): AccountIdentityProvider {
   return createKeycloakAccountIdentityProvider({
     keycloakBaseUrl,
     realm: 'family-wellness',
