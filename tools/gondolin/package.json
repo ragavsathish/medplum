@@ -1,0 +1,12 @@
+{
+  "name": "medplum-health-gondolin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "image": "sh ./build-image.sh",
+    "vm": "node ./run-vm.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/gondolin": "0.12.0"
+  }
+}
