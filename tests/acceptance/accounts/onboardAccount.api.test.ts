@@ -192,6 +192,48 @@ describe('Accounts HTTP API — onboarding', () => {
     ]);
   });
 
+  test('propagates an incoming trace ID to authentication and provisioning', async () => {
+    const traceId = '11111111111111111111111111111111';
+    const contexts: unknown[] = [];
+    const identityProvider = {
+      async authenticate(_authorization: string | undefined, context?: unknown) {
+        contexts.push(context);
+        return {
+          ok: true as const,
+          identity: { accountId: 'alice-user', selfMember: { resourceType: 'Patient' as const, id: 'alice' } },
+        };
+      },
+    };
+    const provisioner: AccountsProvisioner = {
+      async createMinorProfile(_command, context) {
+        contexts.push(context);
+        return { ok: true };
+      },
+    };
+    const appServer = await listen(
+      createServer(createAccountsHttpApp({ medplumBaseUrl, provisioner, identityProvider }))
+    );
+    await postJson(`${appServer.url}accounts/onboard`, undefined, traceId);
+
+    await postJson(
+      `${appServer.url}accounts/minor-profiles`,
+      {
+        id: '20000000-0000-4000-8000-000000000002',
+        identifier: { system: 'https://family.example/member-id', value: 'charlie-2018' },
+        name: { given: ['Charlie'], family: 'Example' },
+        birthDate: '2018-03-04',
+        relationship: 'guardian',
+      },
+      traceId
+    );
+
+    expect(contexts).toEqual([
+      { correlationTraceId: traceId },
+      { correlationTraceId: traceId },
+      { correlationTraceId: traceId },
+    ]);
+  });
+
   test('rejects an identifier collision without disclosing or linking the existing Patient', async () => {
     await traceTo('DI-ACC-004', 'AC-ACC-005');
     useAliceSession();
@@ -724,10 +766,14 @@ function useAliceSession(): void {
   );
 }
 
-async function postJson(url: string, body: unknown): Promise<{ status: number; body: unknown }> {
+async function postJson(url: string, body: unknown, traceId?: string): Promise<{ status: number; body: unknown }> {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { authorization: 'Bearer acceptance-token', 'content-type': 'application/json' },
+    headers: {
+      authorization: 'Bearer acceptance-token',
+      'content-type': 'application/json',
+      ...(traceId ? { traceparent: `00-${traceId}-2222222222222222-01` } : {}),
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const text = await response.text();

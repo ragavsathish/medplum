@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
+import { randomUUID } from 'node:crypto';
 import type { AccountIdentityProvider } from '../../application/ports/accountIdentityProvider';
 
 const BEARER_TOKEN = /^Bearer\s+\S+$/i;
@@ -11,11 +12,13 @@ type AccountSession = {
 
 export function createMedplumAccountIdentityProvider(medplumBaseUrl: string): AccountIdentityProvider {
   return {
-    async authenticate(authorization) {
+    async authenticate(authorization, context) {
       if (!authorization?.match(BEARER_TOKEN)) {
         return { ok: false, reason: 'AUTHENTICATION_REQUIRED' };
       }
-      const response = await fetch(new URL('auth/me', medplumBaseUrl), { headers: { authorization } });
+      const response = await fetch(new URL('auth/me', medplumBaseUrl), {
+        headers: { authorization, ...correlationHeaders(context?.correlationTraceId) },
+      });
       if (!response.ok) {
         return { ok: false, reason: 'AUTHENTICATION_REQUIRED' };
       }
@@ -32,4 +35,8 @@ export function createMedplumAccountIdentityProvider(medplumBaseUrl: string): Ac
       };
     },
   };
+}
+
+function correlationHeaders(traceId: string | undefined): Record<string, string> {
+  return traceId ? { traceparent: `00-${traceId}-${randomUUID().replaceAll('-', '').slice(0, 16)}-01` } : {};
 }

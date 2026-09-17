@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
-import type { Express, Response } from 'express';
+import type { Express, Request, Response } from 'express';
 import express from 'express';
 import {
   createMinorProfileRequestSchema,
@@ -49,7 +49,8 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   app.get('/accounts/openapi.json', (_request, response) => response.status(200).json(ACCOUNTS_OPENAPI));
 
   app.post('/accounts/onboard', async (request, response) => {
-    const authentication = await identityProvider.authenticate(request.get('authorization'));
+    const context = requestContext(request);
+    const authentication = await identityProvider.authenticate(request.get('authorization'), context);
     if (!authentication.ok) {
       sendAuthenticationFailure(response, authentication.reason);
       return;
@@ -71,7 +72,8 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   app.post('/accounts/minor-profiles', async (request, response) => {
-    const authentication = await identityProvider.authenticate(request.get('authorization'));
+    const context = requestContext(request);
+    const authentication = await identityProvider.authenticate(request.get('authorization'), context);
     if (!authentication.ok) {
       sendAuthenticationFailure(response, authentication.reason);
       return;
@@ -105,7 +107,7 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       },
       relationship: input.relationship,
     };
-    const result = await options.provisioner.createMinorProfile(command);
+    const result = await options.provisioner.createMinorProfile(command, context);
     if (!result.ok) {
       if (result.reason === 'IDENTIFIER_COLLISION') {
         response.status(409).json({
@@ -131,7 +133,8 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   app.post('/accounts/family-links', async (request, response) => {
-    const authentication = await identityProvider.authenticate(request.get('authorization'));
+    const context = requestContext(request);
+    const authentication = await identityProvider.authenticate(request.get('authorization'), context);
     if (!authentication.ok) {
       sendAuthenticationFailure(response, authentication.reason);
       return;
@@ -144,7 +147,7 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       return;
     }
     const { memberId } = parsed.data;
-    if (!account || !account.minorProfileIds.has(memberId)) {
+    if (!account?.minorProfileIds.has(memberId)) {
       response.status(409).json({ code: 'MINOR_PROFILE_NOT_AVAILABLE' });
       return;
     }
@@ -153,7 +156,7 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       response.status(503).json({ code: 'PROVISIONER_UNAVAILABLE' });
       return;
     }
-    const result = await options.provisioner.activateOwnerAccess({ accountId, memberId });
+    const result = await options.provisioner.activateOwnerAccess({ accountId, memberId }, context);
     if (!result.ok) {
       response.status(503).json({ type: 'FAMILY_LINK_FAILED', payload: { reason: result.reason } });
       return;
@@ -174,7 +177,8 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   app.post('/accounts/agent-grants', async (request, response) => {
-    const authentication = await identityProvider.authenticate(request.get('authorization'));
+    const context = requestContext(request);
+    const authentication = await identityProvider.authenticate(request.get('authorization'), context);
     if (!authentication.ok) {
       sendAuthenticationFailure(response, authentication.reason);
       return;
@@ -205,7 +209,7 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       previousMemberIds: [...(account.agentGrants.get(agentId)?.memberIds ?? [])],
       tasks,
     };
-    const result = await options.provisioner.activateAgentAccess(command);
+    const result = await options.provisioner.activateAgentAccess(command, context);
     if (!result.ok) {
       response.status(503).json({ code: 'AGENT_GRANT_FAILED' });
       return;
@@ -219,7 +223,8 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   app.post('/accounts/agent-grants/revoke-member', async (request, response) => {
-    const authentication = await identityProvider.authenticate(request.get('authorization'));
+    const context = requestContext(request);
+    const authentication = await identityProvider.authenticate(request.get('authorization'), context);
     if (!authentication.ok) {
       sendAuthenticationFailure(response, authentication.reason);
       return;
@@ -242,11 +247,14 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       return;
     }
 
-    const result = await options.provisioner.deactivateAgentAccess({
-      grantorAccountId: accountId,
-      agentId,
-      memberId,
-    });
+    const result = await options.provisioner.deactivateAgentAccess(
+      {
+        grantorAccountId: accountId,
+        agentId,
+        memberId,
+      },
+      context
+    );
     if (!result.ok) {
       response.status(503).json({ code: 'AGENT_REVOCATION_FAILED' });
       return;
@@ -265,7 +273,8 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   app.post('/accounts/family-links/unlink', async (request, response) => {
-    const authentication = await identityProvider.authenticate(request.get('authorization'));
+    const context = requestContext(request);
+    const authentication = await identityProvider.authenticate(request.get('authorization'), context);
     if (!authentication.ok) {
       sendAuthenticationFailure(response, authentication.reason);
       return;
@@ -278,7 +287,7 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
       return;
     }
     const { memberId } = parsed.data;
-    if (!account || !account.linkedMemberIds.has(memberId)) {
+    if (!account?.linkedMemberIds.has(memberId)) {
       response.status(409).json({ code: 'FAMILY_LINK_NOT_ACTIVE' });
       return;
     }
@@ -290,11 +299,14 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
     const derivativeAgentIds = [...account.agentGrants]
       .filter(([, grant]) => grant.memberIds.has(memberId))
       .map(([agentId]) => agentId);
-    const result = await options.provisioner.deactivateFamilyAccess({
-      accountId,
-      memberId,
-      derivativeAgentIds,
-    });
+    const result = await options.provisioner.deactivateFamilyAccess(
+      {
+        accountId,
+        memberId,
+        derivativeAgentIds,
+      },
+      context
+    );
     if (!result.ok) {
       response.status(503).json({ type: 'FAMILY_UNLINK_FAILED', payload: { reason: result.reason } });
       return;
@@ -315,6 +327,18 @@ export function createAccountsHttpApp(options: AccountsHttpAppOptions): Express 
   });
 
   return app;
+}
+
+function requestContext(request: Request): { readonly correlationTraceId?: string } {
+  const traceParent = request.get('traceparent');
+  const traceId = traceParent?.match(/^00-([0-9a-f]{32})-[0-9a-f]{16}-(?:0[01])$/i)?.[1];
+  if (traceId && !/^0{32}$/.test(traceId)) {
+    return { correlationTraceId: traceId.toLowerCase() };
+  }
+  const correlationId = request.get('x-correlation-id')?.replaceAll('-', '');
+  return correlationId && /^[0-9a-f]{32}$/i.test(correlationId) && !/^0{32}$/.test(correlationId)
+    ? { correlationTraceId: correlationId.toLowerCase() }
+    : {};
 }
 
 function sendAuthenticationFailure(
