@@ -1,0 +1,21 @@
+{
+  "name": "medplum-health-tracking",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@medplum/core": "5.1.37",
+    "@medplum/fhirtypes": "5.1.37",
+    "@types/express": "5.0.6",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11",
+    "zod": "3.25.76",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "dependencies": {
+    "express": "5.2.1"
+  }
+}

@@ -38,6 +38,18 @@ services:
       timeout: 5s
       retries: 5
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.3
+    restart: unless-stopped
+    command: ['start-dev', '--import-realm']
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./examples/medplum-health-tracking/docker/keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - '8180:8080'
+
   # Medplum server container
   medplum-server:
     image: medplum/medplum-server:latest
@@ -80,6 +92,8 @@ services:
       MEDPLUM_DEFAULT_BOT_RUNTIME_VERSION: 'vmcontext'
       MEDPLUM_ALLOWED_ORIGINS: '*'
       MEDPLUM_INTROSPECTION_ENABLED: 'true'
+      # Local acceptance tests create isolated projects concurrently.
+      MEDPLUM_RATE_LIMITS_ENABLED: 'false'
       MEDPLUM_SHUTDOWN_TIMEOUT_MILLISECONDS: 30000
 
     healthcheck:

@@ -20,7 +20,8 @@
     "lint:fix": "turbo run lint:fix --filter=!@medplum/docs",
     "prettier": "prettier --write \"**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,json}\"",
     "sort-package-json": "sort-package-json package.json \"packages/*/package.json\" \"examples/*/package.json\"",
-    "test": "turbo run test --filter=!@medplum/docs"
+    "test": "turbo run test --filter=!@medplum/docs",
+    "test:acceptance:accounts:docker": "cross-env MEDPLUM_DOCKER_ACCEPTANCE=1 vitest run --config tests/acceptance/vitest.config.mts --maxWorkers=2 --maxConcurrency=2 tests/acceptance/accounts/accounts.docker.ac-001-006.api.test.ts tests/acceptance/accounts/accounts.docker.ac-007-012.api.test.ts"
   },
   "prettier": {
     "plugins": [
@@ -51,10 +52,13 @@
     "@types/node": "22.20.1",
     "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "4.1.11",
+    "allure-js-commons": "^3.12.1",
+    "allure-vitest": "^3.12.1",
     "cross-env": "10.1.0",
     "esbuild": "0.28.2",
     "formidable": "3.5.4",
     "jsdom": "29.1.1",
+    "msw": "^2.15.0",
     "npm-check-updates": "22.2.9",
     "prettier": "3.9.6",
     "prettier-plugin-organize-imports": "4.3.0",
