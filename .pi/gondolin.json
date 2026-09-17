@@ -1,0 +1,8 @@
+{
+  "image": "medplum-health-tracking:alpine-3.23",
+  "memory": "8G",
+  "cpus": 4,
+  "disk": "24G",
+  "checkpoint": "~/.cache/gondolin/medplum-health-images.aarch64.qcow2",
+  "policy": ".pi/gondolin-policy.json"
+}
