@@ -1,85 +1,51 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createHttpHooks, RealFSProvider, VM, VmCheckpoint } from '@earendil-works/gondolin';
+import {
+  createVm,
+  prepareKeycloakRealm,
+  prepareNodeModulesCache,
+  resolveCheckpointForStartup,
+  validateWorkspace,
+  waitForDocker,
+  workspace,
+} from "./vm-support.mjs";
 
-const toolDirectory = path.dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = path.resolve(toolDirectory, '../..');
-const workspace = path.resolve(process.env.MEDPLUM_HEALTH_WORKSPACE ?? repositoryRoot);
-const imageRef = process.env.MEDPLUM_HEALTH_GONDOLIN_IMAGE ?? 'medplum-health-tracking:alpine-3.23';
-const checkpointPath = process.env.MEDPLUM_HEALTH_CHECKPOINT
-  ? path.resolve(process.env.MEDPLUM_HEALTH_CHECKPOINT)
-  : undefined;
+validateWorkspace();
 
-if (!fs.existsSync(path.join(workspace, 'docker-compose.full-stack.yml'))) {
-  throw new Error(`No Medplum Compose checkout found at ${workspace}`);
-}
-if (checkpointPath && !fs.existsSync(checkpointPath)) {
-  throw new Error(`Gondolin checkpoint does not exist: ${checkpointPath}`);
-}
-
-const { httpHooks, env } = createHttpHooks({
-  allowedHosts: [
-    '*.docker.com',
-    '*.docker.io',
-    '*.quay.io',
-    'dl-cdn.alpinelinux.org',
-    'quay.io',
-    'registry.npmjs.org',
-  ],
-});
-
-const vmOptions = {
-  sessionLabel: `medplum-health ${path.basename(workspace)}`,
-  sandbox: {
-    imagePath: imageRef,
-    netEnabled: true,
-  },
-  memory: process.env.MEDPLUM_HEALTH_VM_MEMORY ?? '8G',
-  cpus: Number(process.env.MEDPLUM_HEALTH_VM_CPUS ?? '4'),
-  rootfs: {
-    mode: 'cow',
-    size: process.env.MEDPLUM_HEALTH_VM_DISK ?? '24G',
-  },
-  httpHooks,
-  env,
-  allowWebSockets: false,
-  vfs: {
-    mounts: {
-      '/workspace': new RealFSProvider(workspace),
-    },
-  },
-};
-
-const vm = checkpointPath
-  ? await VmCheckpoint.load(checkpointPath).resume(vmOptions)
-  : await VM.create(vmOptions);
-
-async function waitForDocker() {
-  for (let attempt = 1; attempt <= 60; attempt++) {
-    const result = await vm.exec(['/bin/bash', '-lc', 'docker info >/dev/null 2>&1']);
-    if (result.exitCode === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-
-  const logs = await vm.exec(['/bin/bash', '-lc', 'tail -n 200 /var/log/dockerd.log 2>/dev/null || true']);
-  throw new Error(`Docker did not become ready inside Gondolin:\n${logs.stdout}${logs.stderr}`);
-}
+const checkpointPath = resolveCheckpointForStartup();
+const vm = await createVm({ checkpointPath });
 
 try {
-  await waitForDocker();
+  await waitForDocker(vm);
+  const nodeModulesCache = await prepareNodeModulesCache(vm);
+  const keycloakPrepared = await prepareKeycloakRealm(vm);
   const versions = await vm.exec([
-    '/bin/bash',
-    '-lc',
+    "/bin/bash",
+    "-lc",
     'printf "Node "; node --version; printf "Docker "; docker --version; docker compose version',
   ]);
   process.stdout.write(versions.stdout);
   process.stderr.write(versions.stderr);
   process.stdout.write(`Workspace: ${workspace} -> /workspace\n`);
-  if (checkpointPath) process.stdout.write(`Resumed checkpoint: ${checkpointPath}\n`);
-  process.stdout.write('No guest or container port is forwarded to the host.\n');
+  if (checkpointPath)
+    process.stdout.write(`Resumed checkpoint: ${checkpointPath}\n`);
+  if (nodeModulesCache.status === "mounted") {
+    process.stdout.write(
+      `Mounted cached node_modules at ${nodeModulesCache.count} workspace locations.\n`,
+    );
+  } else if (checkpointPath && nodeModulesCache.status === "stale") {
+    process.stdout.write(
+      "The checkpoint node_modules cache does not match package-lock.json; cache not mounted.\n",
+    );
+    process.stdout.write(
+      "Refresh it with FORCE_MEDPLUM_HEALTH_CHECKPOINT=1 npm run env:health:warm.\n",
+    );
+  }
+  if (keycloakPrepared)
+    process.stdout.write("Prepared a fresh Keycloak realm import volume.\n");
+  process.stdout.write(
+    "No guest or container port is forwarded to the host.\n",
+  );
 
-  const result = await vm.shell({ cwd: '/workspace' });
+  const result = await vm.shell({ cwd: "/workspace" });
   process.exitCode = result.exitCode;
 } finally {
   await vm.close();

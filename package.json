@@ -14,6 +14,7 @@
     "clean": "turbo run clean",
     "env:health:image": "npm --prefix tools/gondolin run image",
     "env:health:install": "npm --prefix tools/gondolin ci",
+    "env:health:warm": "npm --prefix tools/gondolin run warm",
     "env:health:vm": "npm --prefix tools/gondolin run vm",
     "lint": "turbo run lint --filter=!@medplum/docs",
     "lint:fix": "turbo run lint:fix --filter=!@medplum/docs",
