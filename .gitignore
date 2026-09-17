@@ -111,7 +111,6 @@ playwright/.cache/
 .claude/*
 !.claude/skills/
 CLAUDE.md
-AGENTS.md
 
 # 0x profiling data
 *.0x
