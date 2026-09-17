@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 
-export type AgentTask = 'digitize-measurement';
+export const AGENT_TASKS = ['digitize-measurement'] as const;
+export type AgentTask = (typeof AGENT_TASKS)[number];
+
+export const FAMILY_RELATIONSHIPS = ['parent', 'guardian'] as const;
+export type FamilyRelationship = (typeof FAMILY_RELATIONSHIPS)[number];
 
 export type AgentGrant = {
   readonly memberIds: ReadonlySet<string>;
