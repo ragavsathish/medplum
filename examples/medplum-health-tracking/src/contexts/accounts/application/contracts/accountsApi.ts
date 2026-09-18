@@ -44,7 +44,7 @@ export const revokeAgentMemberAccessRequestSchema = z
   })
   .strict();
 
-const eventSchema = <Type extends string, Payload extends z.ZodRawShape>(type: Type, payload: Payload) =>
+const eventSchema = <const Type extends string, const Payload extends z.ZodRawShape>(type: Type, payload: Payload) =>
   z
     .object({
       type: z.literal(type),
@@ -89,4 +89,5 @@ export const familyLinkEndedEventSchema = eventSchema('FAMILY_LINK_ENDED', {
 export type CreateMinorProfileRequest = z.infer<typeof createMinorProfileRequestSchema>;
 export type FamilyMemberRequest = z.infer<typeof familyMemberRequestSchema>;
 export type GrantAgentAccessRequest = z.infer<typeof grantAgentAccessRequestSchema>;
+export type PatientReference = z.infer<typeof patientReferenceSchema>;
 export type RevokeAgentMemberAccessRequest = z.infer<typeof revokeAgentMemberAccessRequestSchema>;

@@ -3,7 +3,7 @@
 import type { AccessPolicy, AccessPolicyResource, Bundle, Patient, RelatedPerson } from '@medplum/fhirtypes';
 import { randomUUID } from 'node:crypto';
 import type { AccountRequestContext } from '../../application/ports/accountRequestContext';
-import type { AccountsProvisioner } from '../../application/ports/accountsProvisioner';
+import type { AccountsProvisioner, CreateMinorProfileCommand } from '../../application/ports/accountsProvisioner';
 
 const FAMILY_RELATIONSHIP_EXTENSION =
   'https://family.example/fhir/StructureDefinition/self-reported-family-relationship';
@@ -16,20 +16,14 @@ type MedplumAccountsProvisionerOptions = {
   readonly onError?: (error: unknown) => void;
 };
 
-type CreateMinorProfileCommand = Parameters<AccountsProvisioner['createMinorProfile']>[0];
-type ActivateOwnerAccessCommand = Parameters<NonNullable<AccountsProvisioner['activateOwnerAccess']>>[0];
-type ActivateAgentAccessCommand = Parameters<NonNullable<AccountsProvisioner['activateAgentAccess']>>[0];
-type DeactivateAgentAccessCommand = Parameters<NonNullable<AccountsProvisioner['deactivateAgentAccess']>>[0];
-type DeactivateFamilyAccessCommand = Parameters<NonNullable<AccountsProvisioner['deactivateFamilyAccess']>>[0];
-
-export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisionerOptions): AccountsProvisioner {
+export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisionerOptions) {
   return {
-    async createMinorProfile(command: CreateMinorProfileCommand, context?: AccountRequestContext) {
+    async createMinorProfile(command, context?: AccountRequestContext) {
       try {
         const created = await conditionalCreatePatient(options, context, {
           resourceType: 'Patient',
           identifier: [command.member.identifier],
-          name: [command.member.name],
+          name: [{ ...command.member.name, given: [...command.member.name.given] }],
           birthDate: command.member.birthDate,
           extension: [
             {
@@ -52,14 +46,14 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
       }
     },
 
-    async activateOwnerAccess(command: ActivateOwnerAccessCommand, context?: AccountRequestContext) {
+    async activateOwnerAccess(command, context?: AccountRequestContext) {
       const policyId = options.ownerPolicyIdByAccountId.get(command.accountId);
       return mutateOnePolicy(createFhirRequester(options, context), policyId, (rules) =>
         addMemberRules(rules, command.memberId, false)
       );
     },
 
-    async activateAgentAccess(command: ActivateAgentAccessCommand, context?: AccountRequestContext) {
+    async activateAgentAccess(command, context?: AccountRequestContext) {
       const policyId = options.agentPolicyIdByAgentId.get(command.agentId);
       return mutateOnePolicy(createFhirRequester(options, context), policyId, (rules) => {
         let next = rules;
@@ -75,22 +69,22 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
       });
     },
 
-    async deactivateAgentAccess(command: DeactivateAgentAccessCommand, context?: AccountRequestContext) {
+    async deactivateAgentAccess(command, context?: AccountRequestContext) {
       const policyId = options.agentPolicyIdByAgentId.get(command.agentId);
       return mutateOnePolicy(createFhirRequester(options, context), policyId, (rules) =>
         removeAgentMemberRules(rules, command.memberId)
       );
     },
 
-    async deactivateFamilyAccess(command: DeactivateFamilyAccessCommand, context?: AccountRequestContext) {
+    async deactivateFamilyAccess(command, context?: AccountRequestContext) {
       const request = createFhirRequester(options, context);
       const ownerPolicyId = options.ownerPolicyIdByAccountId.get(command.accountId);
       const agentPolicyIds = command.derivativeAgentIds.map((agentId) => options.agentPolicyIdByAgentId.get(agentId));
-      if (!ownerPolicyId || agentPolicyIds.some((id) => !id)) {
+      if (!ownerPolicyId || !allDefined(agentPolicyIds)) {
         return { ok: false, reason: 'UNAVAILABLE' } as const;
       }
 
-      const policyIds = [ownerPolicyId, ...(agentPolicyIds as string[])];
+      const policyIds = [ownerPolicyId, ...agentPolicyIds];
       try {
         const originals = await Promise.all(policyIds.map((id) => request<AccessPolicy>('GET', `AccessPolicy/${id}`)));
         await request<Bundle>('POST', '', {
@@ -113,7 +107,11 @@ export function createMedplumAccountsProvisioner(options: MedplumAccountsProvisi
         return { ok: false, reason: 'UNAVAILABLE' } as const;
       }
     },
-  };
+  } satisfies AccountsProvisioner;
+}
+
+function allDefined<T>(values: readonly (T | undefined)[]): values is readonly T[] {
+  return values.every((value) => value !== undefined);
 }
 
 async function createRelatedPerson(
@@ -133,7 +131,16 @@ async function createRelatedPerson(
       resourceType: 'RelatedPerson',
       patient: { reference: `Patient/${patient.id}` },
       identifier: [{ system: 'https://family.example/identity/keycloak-sub', value: command.accountId }],
-      relationship: [{ coding: [{ system: 'https://family.example/fhir/CodeSystem/self-reported-family-relationship', code: command.relationship }] }],
+      relationship: [
+        {
+          coding: [
+            {
+              system: 'https://family.example/fhir/CodeSystem/self-reported-family-relationship',
+              code: command.relationship,
+            },
+          ],
+        },
+      ],
     } satisfies RelatedPerson),
   });
   if (!response.ok) {

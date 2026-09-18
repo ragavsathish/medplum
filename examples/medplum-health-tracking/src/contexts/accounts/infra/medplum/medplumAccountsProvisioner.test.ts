@@ -4,6 +4,7 @@ import type { AccessPolicyResource } from '@medplum/fhirtypes';
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
+import type { CreateMinorProfileCommand } from '../../application/ports/accountsProvisioner';
 import { createMedplumAccountsProvisioner } from './medplumAccountsProvisioner';
 
 const baseUrl = 'http://medplum.test/';
@@ -164,9 +165,7 @@ describe('Medplum Accounts provisioner', () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(updatedPolicies).toEqual([
-      { resourceType: 'AccessPolicy', id: 'bot-policy', resource: [] },
-    ]);
+    expect(updatedPolicies).toEqual([{ resourceType: 'AccessPolicy', id: 'bot-policy', resource: [] }]);
   });
 });
 
@@ -179,7 +178,7 @@ function provisioner(): ReturnType<typeof createMedplumAccountsProvisioner> {
   });
 }
 
-function minorCommand(): Parameters<ReturnType<typeof createMedplumAccountsProvisioner>['createMinorProfile']>[0] {
+function minorCommand(): CreateMinorProfileCommand {
   return {
     accountId: 'alice-user',
     member: {

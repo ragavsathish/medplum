@@ -57,11 +57,11 @@ export function createAccountsCommandHandler(options: AccountsCommandHandlerOpti
         return { ok: false as const, reason: 'PROVISIONER_UNAVAILABLE' as const };
       }
 
-      const command: CreateMinorProfileCommand = {
+      const command = {
         accountId: identity.accountId,
         member: { id: input.id, identifier: input.identifier, name: input.name, birthDate: input.birthDate },
         relationship: input.relationship,
-      };
+      } satisfies CreateMinorProfileCommand;
       const result = await provisioner.createMinorProfile(command, context);
       if (!result.ok) {
         return { ok: false as const, reason: result.reason };
@@ -117,11 +117,11 @@ export function createAccountsCommandHandler(options: AccountsCommandHandlerOpti
         return { ok: false as const, reason: 'PROVISIONER_UNAVAILABLE' as const };
       }
 
-      const command: AgentGrantCommand = {
+      const command = {
         grantorAccountId: identity.accountId,
         ...input,
         previousMemberIds: [...(account.agentGrants.get(input.agentId)?.memberIds ?? [])],
-      };
+      } satisfies AgentGrantCommand;
       const result = await provisioner.activateAgentAccess(command, context);
       if (!result.ok) {
         return { ok: false as const, reason: 'AGENT_GRANT_FAILED' as const };

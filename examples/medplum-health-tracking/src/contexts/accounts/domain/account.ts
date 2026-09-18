@@ -46,12 +46,11 @@ export function replaceAgentGrant(
   memberIds: readonly string[],
   tasks: readonly AgentTask[]
 ): Account {
+  const agentGrants = new Map(account.agentGrants);
+  agentGrants.set(agentId, { memberIds: new Set(memberIds), tasks: new Set(tasks) });
   return {
     ...account,
-    agentGrants: new Map([
-      ...[...account.agentGrants].filter(([existingAgentId]) => existingAgentId !== agentId),
-      [agentId, { memberIds: new Set(memberIds), tasks: new Set(tasks) }] as const,
-    ]),
+    agentGrants,
   };
 }
 
@@ -60,27 +59,28 @@ export function revokeAgentMemberAccess(account: Account, agentId: string, membe
   if (!grant) {
     return account;
   }
+  const agentGrants = new Map(account.agentGrants);
+  agentGrants.set(agentId, {
+    ...grant,
+    memberIds: new Set([...grant.memberIds].filter((candidate) => candidate !== memberId)),
+  });
   return {
     ...account,
-    agentGrants: new Map([
-      ...[...account.agentGrants].filter(([existingAgentId]) => existingAgentId !== agentId),
-      [
-        agentId,
-        { ...grant, memberIds: new Set([...grant.memberIds].filter((candidate) => candidate !== memberId)) },
-      ] as const,
-    ]),
+    agentGrants,
   };
 }
 
 export function endFamilyLink(account: Account, memberId: string): Account {
+  const agentGrants = new Map(account.agentGrants);
+  for (const [agentId, grant] of agentGrants) {
+    agentGrants.set(agentId, {
+      ...grant,
+      memberIds: new Set([...grant.memberIds].filter((candidate) => candidate !== memberId)),
+    });
+  }
   return {
     ...account,
     linkedMemberIds: new Set([...account.linkedMemberIds].filter((candidate) => candidate !== memberId)),
-    agentGrants: new Map(
-      [...account.agentGrants].map(([agentId, grant]) => [
-        agentId,
-        { ...grant, memberIds: new Set([...grant.memberIds].filter((candidate) => candidate !== memberId)) },
-      ])
-    ),
+    agentGrants,
   };
 }

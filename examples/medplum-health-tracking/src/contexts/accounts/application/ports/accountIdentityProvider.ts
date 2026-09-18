@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
+import type { PatientReference } from '../contracts/accountsApi';
 import type { AccountRequestContext } from './accountRequestContext';
 
 export type AccountIdentity = {
   readonly accountId: string;
-  readonly selfMember: { readonly resourceType: 'Patient'; readonly id: string };
+  readonly selfMember: Readonly<PatientReference>;
 };
 
 export type AccountAuthenticationResult =
