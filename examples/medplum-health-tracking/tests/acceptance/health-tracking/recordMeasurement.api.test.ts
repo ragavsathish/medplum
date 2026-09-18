@@ -8,7 +8,8 @@ import type { Server } from 'node:http';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
-import { createHealthTrackingHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
+import { MEASUREMENT_IDENTIFIER_SYSTEM } from '../../../src/contexts/health-tracking/infra/fhir/measurementObservations';
+import { createHealthTrackingHttpApp } from '../../../src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
 
 const medplumBaseUrl = 'http://medplum.test/';
 const accessToken = createTestAccessToken();
@@ -74,7 +75,7 @@ describe('Health Tracking HTTP API — baseline acceptance', () => {
     expect(captured.every((request) => request.authorization === '[REDACTED]')).toBe(true);
     expect(transactionResource(captured[1]?.body, 'Observation')).toMatchObject({
       resourceType: 'Observation',
-      id: measurement.id,
+      identifier: [{ system: MEASUREMENT_IDENTIFIER_SYSTEM, value: measurement.id }],
       meta: { profile: [profile] },
       subject: { reference: 'Patient/20000000-0000-4000-8000-000000000001' },
       effectiveDateTime: measurement.observedAt,
@@ -87,9 +88,13 @@ describe('Health Tracking HTTP API — baseline acceptance', () => {
     });
     expect(transactionResource(captured[1]?.body, 'Provenance')).toMatchObject({
       resourceType: 'Provenance',
-      target: [{ reference: `Observation/${measurement.id}` }],
+      target: [{ reference: `urn:uuid:${measurement.id}` }],
       occurredDateTime: measurement.observedAt,
       agent: [{ who: { reference: 'RelatedPerson/parent-1' } }],
+    });
+    expect(transactionEntry(captured[1]?.body, 'Observation')).toMatchObject({
+      fullUrl: `urn:uuid:${measurement.id}`,
+      request: { method: 'POST', url: 'Observation' },
     });
   });
 });
@@ -320,13 +325,18 @@ function createTestAccessToken(): string {
 }
 
 function transactionResource(value: unknown, resourceType: string): Record<string, unknown> | undefined {
+  const entry = transactionEntry(value, resourceType);
+  return entry && isRecord(entry.resource) ? entry.resource : undefined;
+}
+
+function transactionEntry(value: unknown, resourceType: string): Record<string, unknown> | undefined {
   if (!isRecord(value) || !Array.isArray(value.entry)) {
     return undefined;
   }
   for (const entry of value.entry) {
     const resource = isRecord(entry) && isRecord(entry.resource) ? entry.resource : undefined;
     if (resource?.resourceType === resourceType) {
-      return resource;
+      return entry;
     }
   }
   return undefined;

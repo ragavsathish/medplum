@@ -7,6 +7,6 @@ export default defineConfig({
     name: 'medplum-health-tracking',
     globals: true,
     environment: 'node',
-    include: ['src/**/*.test.ts', 'tests/acceptance/accounts/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'tests/acceptance/**/*.test.ts'],
   },
 });

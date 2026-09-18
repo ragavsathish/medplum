@@ -2,7 +2,8 @@
 
 ## Acceptance tests
 
-Run the Accounts acceptance suite and its local Medplum, PostgreSQL, Redis, and Keycloak stack:
+Run the Accounts and Health Tracking acceptance suites with their local Medplum, PostgreSQL, Redis, and Keycloak
+stack:
 
 ```bash
 npm run test:acceptance:stack

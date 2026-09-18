@@ -5,7 +5,7 @@
   "scripts": {
     "pretest:acceptance": "rimraf dhf/allure-results",
     "test": "vitest run",
-    "test:acceptance": "MEDPLUM_ACCEPTANCE=1 vitest run --config tests/acceptance/vitest.config.mts --maxWorkers=2 --maxConcurrency=2 tests/acceptance/accounts/*.acceptance.test.ts",
+    "test:acceptance": "MEDPLUM_ACCEPTANCE=1 vitest run --config tests/acceptance/vitest.config.mts --maxWorkers=2 --maxConcurrency=2 tests/acceptance/accounts/*.acceptance.test.ts tests/acceptance/health-tracking/*.acceptance.test.ts",
     "test:acceptance:stack": "docker compose -f docker-compose.acceptance.yml up -d --wait --pull never && npm run test:acceptance",
     "typecheck": "tsc --noEmit"
   },

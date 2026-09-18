@@ -6,9 +6,9 @@ import type { HeightMeasurement, WeightMeasurement } from '../../core/entities/m
 const HEIGHT_UCUM = { m: 'm', cm: 'cm', in: '[in_i]' } as const;
 const WEIGHT_UCUM = { kg: 'kg', g: 'g', mg: 'mg', lb: '[lb_av]', oz: '[oz_av]' } as const;
 
-export type IdentifiedObservation = Observation & { id: string };
+export const MEASUREMENT_IDENTIFIER_SYSTEM = 'https://family.example/fhir/identifier/health-measurement';
 
-export function toHeightObservation(measurement: HeightMeasurement): IdentifiedObservation {
+export function toHeightObservation(measurement: HeightMeasurement): Observation {
   return toObservation(
     measurement,
     'http://hl7.org/fhir/StructureDefinition/bodyheight',
@@ -18,7 +18,7 @@ export function toHeightObservation(measurement: HeightMeasurement): IdentifiedO
   );
 }
 
-export function toWeightObservation(measurement: WeightMeasurement): IdentifiedObservation {
+export function toWeightObservation(measurement: WeightMeasurement): Observation {
   return toObservation(
     measurement,
     'http://hl7.org/fhir/StructureDefinition/bodyweight',
@@ -34,10 +34,10 @@ function toObservation(
   code: string,
   display: string,
   unitCode: string
-): IdentifiedObservation {
+): Observation {
   return {
     resourceType: 'Observation',
-    id: measurement.id,
+    identifier: [{ system: MEASUREMENT_IDENTIFIER_SYSTEM, value: measurement.id }],
     meta: { profile: [profile] },
     status: 'final',
     category: [

@@ -7,10 +7,9 @@ import type { Measurement } from '../../core/entities/measurement';
 export function toMeasurementProvenance(
   measurement: Measurement,
   actor: AuthenticatedActor,
-  recorded: string
+  recorded: string,
+  observationReference: string
 ): Provenance {
-  const observationReference = `Observation/${measurement.id}`;
-
   return {
     resourceType: 'Provenance',
     target: [{ reference: observationReference }],

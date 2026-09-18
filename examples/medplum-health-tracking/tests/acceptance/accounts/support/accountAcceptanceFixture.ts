@@ -8,8 +8,8 @@ import type {
   Identifier,
   Observation,
   Patient,
-  Provenance,
   ProjectMembership,
+  Provenance,
   Resource,
   ResourceType,
 } from '@medplum/fhirtypes';
@@ -84,6 +84,7 @@ export type AccountAcceptanceFixture = {
     patientId: string,
     observation?: Partial<Observation>
   ): Promise<ObservationSubmission>;
+  recordMeasurementAsDigitizationBot(healthTrackingUrl: string, measurement: unknown): Promise<AccountApiResponse>;
   createPatientAsDigitizationBot(): Promise<AccountApiResponse>;
   createProvenanceAsDigitizationBot(patientId: string): Promise<AccountApiResponse>;
   findObservations(identifier: Identifier): Promise<Observation[]>;
@@ -320,7 +321,7 @@ export async function createAccountAcceptanceFixture(
     return { status: response.status, body, identifier: built.identifier, ...(observationId ? { observationId } : {}) };
   };
 
-  const executeDigitizationBot = async (input: Resource): Promise<AccountApiResponse> => {
+  const executeDigitizationBot = async (input: unknown): Promise<AccountApiResponse> => {
     const response = await fetch(new URL(`fhir/R4/Bot/${digitizationBot.id}/$execute`, medplumBaseUrl), {
       method: 'POST',
       headers: {
@@ -388,6 +389,8 @@ export async function createAccountAcceptanceFixture(
     createLinkedMinor,
     createObservationAsAlice: submitObservationAsAlice,
     createObservationAsDigitizationBot: submitObservationAsDigitizationBot,
+    recordMeasurementAsDigitizationBot: (healthTrackingUrl, measurement) =>
+      executeDigitizationBot({ operation: 'record-measurement', healthTrackingUrl, measurement }),
     createPatientAsDigitizationBot: () =>
       executeDigitizationBot({ resourceType: 'Patient', active: true } satisfies Patient),
     createProvenanceAsDigitizationBot: (patientId) =>
@@ -450,6 +453,17 @@ const { getStatus } = require('@medplum/core');
 
 exports.handler = async function (medplum, event) {
   try {
+    if (event.input && event.input.operation === 'record-measurement') {
+      const response = await fetch(event.input.healthTrackingUrl, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer ' + medplum.getAccessToken(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(event.input.measurement),
+      });
+      return { status: response.status, body: await response.json() };
+    }
     const created = await medplum.createResource(event.input);
     return { status: 201, body: created };
   } catch (error) {

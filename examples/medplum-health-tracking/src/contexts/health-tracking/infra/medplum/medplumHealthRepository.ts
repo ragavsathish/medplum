@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { MedplumClient } from '@medplum/core';
 import { getStatus, isOperationOutcome, OperationOutcomeError } from '@medplum/core';
-import type { Bundle } from '@medplum/fhirtypes';
+import type { Bundle, Observation } from '@medplum/fhirtypes';
 import type { AuthenticatedActor } from '../../application/ports/currentActor';
 import type { HealthRepository, SaveMeasurementResult } from '../../application/ports/healthRepository';
 import { SAVE_MEASUREMENT_RESULTS } from '../../application/ports/healthRepository';
 import type { Measurement } from '../../core/entities/measurement';
-import type { IdentifiedObservation } from '../fhir/measurementObservations';
 import { toHeightObservation, toWeightObservation } from '../fhir/measurementObservations';
 import { toMeasurementProvenance } from '../fhir/measurementProvenance';
 
@@ -45,29 +44,32 @@ function mapTransactionResponse(response: Bundle): SaveMeasurementResult {
 
 function toMeasurementTransaction(measurement: Measurement, actor: AuthenticatedActor, recorded: string): Bundle {
   const observation = toObservation(measurement);
-  const observationReference = `Observation/${observation.id}`;
+  const observationReference = `urn:uuid:${measurement.id}`;
 
   return {
     resourceType: 'Bundle',
     type: 'transaction',
     entry: [
       {
+        fullUrl: observationReference,
         resource: observation,
-        request: { method: 'PUT', url: observationReference },
+        request: {
+          method: 'POST',
+          url: 'Observation',
+        },
       },
       {
-        resource: toMeasurementProvenance(measurement, actor, recorded),
+        resource: toMeasurementProvenance(measurement, actor, recorded, observationReference),
         request: {
           method: 'POST',
           url: 'Provenance',
-          ifNoneExist: `target=${observationReference}`,
         },
       },
     ],
   };
 }
 
-function toObservation(measurement: Measurement): IdentifiedObservation {
+function toObservation(measurement: Measurement): Observation {
   return measurement.kind === 'height' ? toHeightObservation(measurement) : toWeightObservation(measurement);
 }
 

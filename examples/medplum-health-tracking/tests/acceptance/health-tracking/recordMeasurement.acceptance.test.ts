@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
 import type { LoginAuthenticationResponse } from '@medplum/core';
-import { createReference, MedplumClient } from '@medplum/core';
-import type { AccessPolicy, Patient, Provenance, ResourceType } from '@medplum/fhirtypes';
+import { MedplumClient } from '@medplum/core';
+import type { Patient, Provenance, ResourceType } from '@medplum/fhirtypes';
 import * as allure from 'allure-js-commons';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -11,24 +11,28 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { createHealthTrackingHttpApp } from '../../../examples/medplum-health-tracking/src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
+import { MEASUREMENT_IDENTIFIER_SYSTEM } from '../../../src/contexts/health-tracking/infra/fhir/measurementObservations';
+import { createHealthTrackingHttpApp } from '../../../src/contexts/health-tracking/infra/http/healthTrackingHttpApp';
+import { createAccountAcceptanceFixture } from '../accounts/support/accountAcceptanceFixture';
 
-const runDockerAcceptance = process.env['MEDPLUM_DOCKER_ACCEPTANCE'] === '1';
+const runAcceptance = process.env['MEDPLUM_ACCEPTANCE'] === '1';
 const medplumBaseUrl = process.env['MEDPLUM_BASE_URL'] ?? 'http://localhost:8103/';
 const executeFile = promisify(execFile);
 let healthTrackingServer: Server | undefined;
 let healthTrackingUrl: string;
+let digitizationBotHealthTrackingUrl: string;
 let medplum: MedplumClient;
 let dockerEvidenceSince: string;
 const createdResources: { client: MedplumClient; resourceType: ResourceType; id: string }[] = [];
 
-describe.skipIf(!runDockerAcceptance)('Health Tracking HTTP API — Docker Medplum', () => {
+describe.skipIf(!runAcceptance)('Health Tracking HTTP API — full-stack Medplum', () => {
   beforeAll(async () => {
     dockerEvidenceSince = new Date(Date.now() - 1_000).toISOString();
     medplum = await loginToDockerMedplum();
-    const listening = await listen(createServer(createHealthTrackingHttpApp({ medplumBaseUrl })));
+    const listening = await listen(createServer(createHealthTrackingHttpApp({ medplumBaseUrl })), '0.0.0.0');
     healthTrackingServer = listening.server;
     healthTrackingUrl = listening.url;
+    digitizationBotHealthTrackingUrl = `http://host.docker.internal:${listening.port}/measurements`;
   }, 30_000);
 
   afterAll(async () => {
@@ -77,9 +81,12 @@ describe.skipIf(!runDockerAcceptance)('Health Tracking HTTP API — Docker Medpl
       body: JSON.stringify(measurement),
     });
     const responseBody: unknown = await response.json();
-    const observation = await medplum.readResource('Observation', measurement.id);
+    const observation = await findMeasurementObservation(medplum, measurement.id);
+    if (!observation?.id) {
+      throw new Error(`Measurement Observation ${measurement.id} was not persisted`);
+    }
     createdResources.push({ client: medplum, resourceType: 'Observation', id: observation.id });
-    const provenance = await medplum.searchOne('Provenance', { target: `Observation/${measurement.id}` });
+    const provenance = await medplum.searchOne('Provenance', { target: `Observation/${observation.id}` });
     if (provenance?.id) {
       createdResources.push({ client: medplum, resourceType: 'Provenance', id: provenance.id });
     }
@@ -106,104 +113,115 @@ describe.skipIf(!runDockerAcceptance)('Health Tracking HTTP API — Docker Medpl
     expect(responseBody).toEqual({ type: 'MEASUREMENT_RECORDED', payload: measurement });
     expect(observation).toMatchObject({
       resourceType: 'Observation',
-      id: measurement.id,
+      identifier: [{ system: MEASUREMENT_IDENTIFIER_SYSTEM, value: measurement.id }],
       subject: { reference: `Patient/${patient.id}` },
       effectiveDateTime: measurement.observedAt,
       valueQuantity: { value, unit, system: 'http://unitsofmeasure.org', code: unit },
     });
     expect(provenance).toMatchObject<Partial<Provenance>>({
       resourceType: 'Provenance',
-      target: [{ reference: `Observation/${measurement.id}` }],
+      target: [{ reference: `Observation/${observation.id}` }],
     });
     expect(validation.issue.every((issue) => issue.severity !== 'error' && issue.severity !== 'fatal')).toBe(true);
   });
 
-  test('returns 403 when a real Medplum AccessPolicy denies the write', async () => {
+  test('honors the Accounts Digitization Bot grant at measurement commit time', async () => {
     await allure.epic('UN-HT-001');
-    await allure.feature('DI-1');
+    await allure.feature('DI-3');
+    await allure.label('acceptanceCriterion', 'AC-HT-004');
     await allure.label('designScenario', 'NOT_PERMITTED');
     await allure.label('environment', 'docker-medplum');
+    const fixture = await createAccountAcceptanceFixture({ projectDisplay: 'AC-HT-004 Bot grant' });
+    try {
+      expect((await fixture.postAsAlice('accounts/onboard')).status).toBe(200);
+      const member = await fixture.createLinkedMinor();
+      const measurement = botMeasurement(member.id);
+      const deniedBeforeGrant = await fixture.recordMeasurementAsDigitizationBot(
+        digitizationBotHealthTrackingUrl,
+        measurement
+      );
+      expect(deniedBeforeGrant.status).toBe(403);
+      expect(await findMeasurementObservation(fixture.admin, measurement.id)).toBeUndefined();
 
-    const projectAdmin = await loginToDockerMedplum({
-      email: process.env['MEDPLUM_ACCEPTANCE_EMAIL'] ?? 'admin@example.com',
-      password: process.env['MEDPLUM_ACCEPTANCE_PASSWORD'] ?? 'medplum_admin',
-      projectDisplay: 'Health Tracking Acceptance',
-    });
-    await projectAdmin.getProfileAsync();
-    const project = projectAdmin.getProject();
-    if (!project?.id) {
-      throw new Error('Docker Medplum session has no project');
-    }
-    const policy = await projectAdmin.createResource<AccessPolicy>({
-      resourceType: 'AccessPolicy',
-      name: `Health Tracking deny write ${randomUUID()}`,
-    });
-    createdResources.push({ client: projectAdmin, resourceType: 'AccessPolicy', id: policy.id });
-    const email = `health-tracking-${randomUUID()}@example.com`;
-    const password = `Acceptance-${randomUUID()}`;
-    const membership = await projectAdmin.invite(project.id, {
-      resourceType: 'Practitioner',
-      firstName: 'Restricted',
-      lastName: 'Recorder',
-      email,
-      password,
-      sendEmail: false,
-      accessPolicy: createReference(policy),
-    });
-    if (membership.resourceType !== 'ProjectMembership' || !membership.id || !membership.profile?.reference) {
-      throw new Error('Could not create restricted acceptance user');
-    }
-    createdResources.push({ client: projectAdmin, resourceType: 'ProjectMembership', id: membership.id });
-    const profileId = membership.profile.reference.split('/')[1];
-    if (profileId) {
-      createdResources.push({ client: projectAdmin, resourceType: 'Practitioner', id: profileId });
-    }
-    const patient = await projectAdmin.createResource<Patient>({ resourceType: 'Patient' });
-    createdResources.push({ client: projectAdmin, resourceType: 'Patient', id: patient.id });
-    const restrictedMedplum = await loginToDockerMedplum({ email, password, projectDisplay: project.name });
-    const measurement = {
-      id: randomUUID(),
-      patientId: patient.id,
-      observedAt: new Date().toISOString(),
-      kind: 'weight',
-      value: 32.4,
-      unit: 'kg',
-    } as const;
-    createdResources.push({ client: projectAdmin, resourceType: 'Observation', id: measurement.id });
-    const response = await fetch(`${healthTrackingUrl}measurements`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${restrictedMedplum.getAccessToken()}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(measurement),
-    });
-    const responseBody: unknown = await response.json();
-    const persistedObservation = await projectAdmin.readResource('Observation', measurement.id).catch(() => undefined);
-    const composeEvidence = await readComposeEvidence();
+      expect(
+        await fixture.postAsAlice('accounts/agent-grants', {
+          agentId: fixture.digitizationBotId,
+          memberIds: [member.id],
+          tasks: ['digitize-measurement'],
+        })
+      ).toMatchObject({ status: 201 });
+      const recorded = await fixture.recordMeasurementAsDigitizationBot(digitizationBotHealthTrackingUrl, measurement);
+      expect(recorded).toEqual({ status: 201, body: { type: 'MEASUREMENT_RECORDED', payload: measurement } });
+      const observation = await findMeasurementObservation(fixture.admin, measurement.id);
+      if (!observation?.id) {
+        throw new Error(`Digitization Bot did not persist measurement ${measurement.id}`);
+      }
+      const provenance = await fixture.admin.searchOne('Provenance', { target: `Observation/${observation.id}` });
+      fixture.track(observation);
+      if (provenance?.id) {
+        fixture.track(provenance);
+      }
 
-    await allure.attachment(
-      'Docker AccessPolicy evidence',
-      JSON.stringify(
-        {
-          request: { method: 'POST', path: '/measurements', authorization: '[REDACTED]', body: measurement },
-          response: { status: response.status, body: responseBody },
-          readBack: { observation: persistedObservation ?? null },
-          accessPolicy: { id: policy.id, resourceRules: policy.resource ?? [] },
-          actor: membership.profile.reference,
-        },
-        null,
-        2
-      ),
-      { contentType: 'application/json' }
-    );
-    await allure.attachment('Docker Compose evidence', composeEvidence, { contentType: 'text/plain' });
+      expect(observation.subject?.reference).toBe(`Patient/${member.id}`);
+      expect(provenance).toMatchObject<Partial<Provenance>>({
+        target: [{ reference: `Observation/${observation.id}` }],
+        agent: [{ who: { reference: `Bot/${fixture.digitizationBotId}` } }],
+      });
 
-    expect(response.status).toBe(403);
-    expect(responseBody).toMatchObject({ resourceType: 'OperationOutcome', issue: [{ code: 'forbidden' }] });
-    expect(persistedObservation).toBeUndefined();
-  });
+      expect(
+        await fixture.postAsAlice('accounts/agent-grants/revoke-member', {
+          agentId: fixture.digitizationBotId,
+          memberId: member.id,
+        })
+      ).toMatchObject({ status: 200 });
+      const delayedMeasurement = botMeasurement(member.id);
+      const deniedAfterRevocation = await fixture.recordMeasurementAsDigitizationBot(
+        digitizationBotHealthTrackingUrl,
+        delayedMeasurement
+      );
+      expect(deniedAfterRevocation.status).toBe(403);
+      expect(await findMeasurementObservation(fixture.admin, delayedMeasurement.id)).toBeUndefined();
+
+      await allure.attachment(
+        'Digitization Bot grant evidence',
+        JSON.stringify(
+          {
+            actor: `Bot/${fixture.digitizationBotId}`,
+            member: `Patient/${member.id}`,
+            deniedBeforeGrant,
+            recorded,
+            provenance,
+            deniedAfterRevocation,
+            policyAfterRevocation: await fixture.readDigitizationBotPolicy(),
+          },
+          null,
+          2
+        ),
+        { contentType: 'application/json' }
+      );
+      await allure.attachment('Docker Compose evidence', await readComposeEvidence(), { contentType: 'text/plain' });
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 300_000);
 });
+
+function botMeasurement(patientId: string) {
+  return {
+    id: randomUUID(),
+    patientId,
+    observedAt: new Date().toISOString(),
+    kind: 'weight',
+    value: 32.4,
+    unit: 'kg',
+  } as const;
+}
+
+async function findMeasurementObservation(client: MedplumClient, measurementId: string) {
+  return client.searchOne('Observation', {
+    identifier: `${MEASUREMENT_IDENTIFIER_SYSTEM}|${measurementId}`,
+  });
+}
 
 async function loginToDockerMedplum(
   credentials: { email: string; password: string; projectDisplay?: string } = {
@@ -259,7 +277,7 @@ async function readComposeEvidence(): Promise<string> {
   try {
     const status = await executeFile(
       'docker',
-      ['compose', '-f', 'docker-compose.full-stack.yml', 'ps', '--format', 'json'],
+      ['compose', '-f', 'docker-compose.acceptance.yml', 'ps', '--format', 'json'],
       { cwd: process.cwd(), maxBuffer: 2_000_000 }
     );
     const logs = await executeFile(
@@ -267,7 +285,7 @@ async function readComposeEvidence(): Promise<string> {
       [
         'compose',
         '-f',
-        'docker-compose.full-stack.yml',
+        'docker-compose.acceptance.yml',
         'logs',
         '--no-color',
         '--since',
@@ -282,13 +300,13 @@ async function readComposeEvidence(): Promise<string> {
   }
 }
 
-async function listen(server: Server): Promise<{ server: Server; url: string }> {
+async function listen(server: Server, host = '127.0.0.1'): Promise<{ server: Server; url: string; port: number }> {
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
+    server.listen(0, host, resolve);
   });
   const address = server.address() as AddressInfo;
-  return { server, url: `http://127.0.0.1:${address.port}/` };
+  return { server, url: `http://127.0.0.1:${address.port}/`, port: address.port };
 }
 
 async function closeServer(server: Server | undefined): Promise<void> {
