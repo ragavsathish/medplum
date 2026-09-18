@@ -1,0 +1,9 @@
+services:
+  keycloak:
+    volumes:
+      - medplum-health-keycloak-import:/opt/keycloak/data/import:ro
+
+volumes:
+  medplum-health-keycloak-import:
+    external: true
+    name: medplum-health-keycloak-import
